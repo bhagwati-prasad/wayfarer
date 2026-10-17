@@ -40,6 +40,9 @@ Effects: storage write / read / remove.
 #### `store.snapshot() → Snapshot` · `store.restore(snapshot) → void`
 Serialisable copy (persisted + transient slices, minus secrets). Effects: state (restore) · emit `state:change`.
 
+#### `store.getSnapshot() → State` · `store.toObservable(selector?) → { subscribe(observer) → { unsubscribe() } }`
+Framework interop kept dependency‑free: `subscribe` + `getSnapshot` are `useSyncExternalStore`‑compatible (React), the store is a valid Svelte store contract, `toObservable` follows the TC39/RxJS observable contract (Angular `async` pipe, Vue `from`). The later `bindings/react|vue|angular.js` wrappers are thin layers over these. Effects: none.
+
 #### `store.destroy() → void`
 Effects: storage flush · listeners cleared.
 
@@ -78,7 +81,7 @@ SdkError            { code, message, cause?, requestId?, retryable: boolean, det
 ├─ AbortError       { reason }
 ├─ StorageError
 ├─ UnsupportedError { feature }
-├─ ApiError         { status, code, details, meta }
+├─ ApiError         { status, code, problem?: Problem, issues?: Problem['errors'], details, meta }   // RFC 9457 fields kept on `problem`
 │  ├─ AuthError      { reason: 'unauthenticated'|'expired'|'forbidden'|'invalid_credentials'|'mfa_required'|'otp_invalid'|'otp_expired'|'locked' }
 │  ├─ RateLimitError { retryAfterMs }
 │  ├─ NotFoundError
@@ -97,8 +100,11 @@ SdkError            { code, message, cause?, requestId?, retryable: boolean, det
 #### `isSdkError(e) → boolean` · `isRetryable(e) → boolean` · `is(e, Class) → boolean`
 Effects: none.
 
-#### `errorFromResponse(status, body, { requestId, map? }) → ApiError`
-Build the right subclass from an HTTP failure (`body.code` wins over status). Effects: none.
+#### `errorFromProblem(problem: Problem, { requestId, map? }) → ApiError`
+Build the right subclass from an RFC 9457 document: `problem.code` (extension) wins, then the last path segment of `problem.type` (e.g. `https://api.ota.com/problems/offer-expired` → `OFFER_EXPIRED`), then `status`. Amadeus‑style `errors[]` issues are kept as `issues`. Effects: none.
+
+#### `errorFromResponse(status, body, headers, { requestId, map? }) → ApiError`
+Detects `application/problem+json` and delegates to `errorFromProblem`; legacy `{ code, message }` bodies and empty bodies fall back to status mapping. Effects: none.
 
 #### `wrap(e: unknown, fallback?: { code, message }) → SdkError`
 Normalise anything thrown (DOMException, TypeError from fetch, gateway errors). Effects: none.

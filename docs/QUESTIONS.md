@@ -1,4 +1,31 @@
-# Open questions before implementation
+# Decisions & open questions
+
+## Decision log (answered 2026‑10‑17)
+
+| # | decision |
+|---|---|
+| 1 | Markets: default — multi‑market design, `en-IN` + `en-US` bundles first |
+| 5 | Result model: **both**; frontend requests `resultMode: 'per_slice' | 'combined'`; **default is split (`per_slice`)** |
+| 6 | Self‑transfer / multi‑ticket offers: default — types kept, UI warning badge |
+| 8 | Protection products: default — generic `Protection[]` catalogue from backend; insurance explicit accept/decline |
+| 9 | Fare hold: **backend decides per flight** — none / free window (24 h or longer) / paid; after the window the hold is dropped, charged or converted per backend policy (`Offer.hold`, `HoldOption.onExpiry`) |
+| 12 | Post‑booking self‑service: default — all exposed, gated by `availableActions` |
+| 15 | Base URL: `https://api.ota.com` (paths carry their own version prefix because the backend mirrors the Amadeus paths) |
+| 16 | Auth: default model (bearer access in memory + refresh). **`auth/session.js` is a standalone script**, never merged with anything. **Access gating is configurable** per function key (`config.access`: open / guest / auth). **Guests may book**; their guest session + token are the account key and `auth.claimAccount` → email / SMS link lets them set a password and own the account |
+| 18 | Errors: **RFC 9457 `application/problem+json`** (`problemInterceptor`, `errorFromProblem`) |
+| 19 | Search transport: default — async session + polling, SSE optional |
+| 21 | Money: default — decimal string + ISO currency |
+| 22 | Times: default — ISO with offset in the SDK model; Amadeus offset‑less local times are adapted (see BACKEND-MAPPING.md) |
+| 30 | Backend contract: Amadeus swagger specs in `/amadeus` (9 files). Coverage and gaps are reported in `BACKEND-MAPPING.md`; the uncovered surface keeps the SDK‑defined contract + MSW mocks |
+| 31 | Payments **isolated** from the domain SDK (`@wayfarer/sdk/payments`, `PaymentsPort`); adapters for **Stripe, PayPal, Razorpay** |
+| 35 | 3‑DS finalisation: default — webhook‑first, client `finalize` is a no‑op when the server already knows |
+| 39 | Language: plain JS + JSDoc, generated `.d.ts` |
+| 41 | Bindings: vanilla now; store exposes `subscribe/getSnapshot/toObservable` so React, Vue and Angular wrappers can be added later without touching the core |
+| 42 | UI: **both** — headless builders + default renderers + `styles.css`; customers may use the stylesheet or style everything themselves |
+
+Everything below not listed above is still open and runs on its stated default.
+
+---
 
 Each item has a **Default** the SDK will assume if you don't say otherwise. Answer by number ("3: INR + USD + AED", "17: ok", "22: Razorpay + Stripe"). Items marked ★ change the shape of the API; the rest mostly change defaults and bundled adapters.
 

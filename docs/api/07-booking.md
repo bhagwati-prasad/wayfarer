@@ -13,11 +13,12 @@ Effects: net `POST /itineraries/{id}/price`, `POST /bookings` (with `Idempotency
 Throws: `ValidationError`, `PriceChangedError` (unaccepted change), `ItineraryExpiredError`, `OfferUnavailableError`, `BookingError{stage:'create'}`.
 
 #### `booking.holdOptions(itineraryId?, opts?) → Promise<HoldOption[]>`
-Book‑now‑pay‑later options (free 24 h hold, paid 72 h hold…). Effects: net `GET /itineraries/{id}/hold-options`.
+Book‑now‑pay‑later options. The policy is decided by the backend **per flight** (`Offer.hold`): none, free for a window (e.g. 24 h), or paid for longer; `onExpiry` says whether an unpaid hold is dropped, charged or converted. Resolves `[]` when holding is not allowed.
+Effects: net `GET /itineraries/{id}/hold-options` (skipped when `Offer.hold.allowed === false`).
 
 #### `booking.hold(itineraryId?, { holdOptionId, consents, metadata? }, opts?) → Promise<Booking>`
-Create an `on_hold` booking with `holdExpiresAt`; a hold fee (if any) is paid via `payments.*`.
-Effects: net `POST /bookings` (`mode: 'hold'`) · state `booking.current` · storage · emit `booking:held`, `booking:created`.
+Create an `on_hold` booking with `holdExpiresAt`; a hold fee (if any) is paid via `payments.*`. A timer emits `booking:holdExpiring` (T‑24 h and T‑1 h) and `booking:holdExpired`; after expiry the backend applies the option's `onExpiry`.
+Effects: net `POST /bookings` (`mode: 'hold'`) · state `booking.current` · storage · timer · emit `booking:held`, `booking:created`.
 Throws: `ApiError{code:'HOLD_NOT_ALLOWED'}` + those of `create`.
 
 #### `booking.get(bookingId, { fresh? } = {}, opts?) → Promise<Booking>` · `booking.current() → Booking|null` · `booking.status() → BookingStatus|null`
@@ -67,7 +68,17 @@ Effects: state `booking`, `payment` reset · storage remove · timer clear.
 
 ---
 
-## 2. `modules/payments.js`
+## 2. `payments/index.js` (isolated package `@wayfarer/sdk/payments`)
+
+Payments are **not** part of the domain SDK. `createPayments({ gateways, returnUrl, http?, store?, events? })` returns a `PaymentsPort`; the host passes it to `createClient({ payments })`, which wires http/store/events into it. Domain modules (`booking`, `trips`, `itinerary.lock`) only call the port; with no port installed, those flows stop at `pending_payment` and `booking.failureInfo` reports `suggestedAction:'retry_payment'`. Gateway adapters ship as separate scripts so a bundle only carries the ones imported:
+
+| adapter | script | how it works |
+|---|---|---|
+| `stripeAdapter({ publishableKey, appearance?, locale? })` | `payments/adapters/stripe.js` | loads Stripe.js, mounts Payment Element / Express Checkout (Apple/Google Pay) against `intent.clientSecret`, `confirm` = `stripe.confirmPayment` with `redirect:'if_required'`, 3‑DS handled by Stripe; `handleAction` for redirect returns |
+| `paypalAdapter({ clientId, currency?, intent? })` | `payments/adapters/paypal.js` | loads PayPal JS SDK, mounts Smart Buttons; `createOrder` → backend intent, `onApprove` → `payments.confirm({ gatewayPayload: { orderID } })`; Pay Later / Venmo buttons when eligible |
+| `razorpayAdapter({ keyId, theme?, prefill? })` | `payments/adapters/razorpay.js` | loads Checkout.js, opens Razorpay Checkout for cards / UPI (collect + intent) / net‑banking / wallets / EMI with `order_id` from the intent; `handler` → `payments.confirm({ gatewayPayload: { razorpay_payment_id, razorpay_signature } })`; dismiss → `payments.cancel` |
+
+All adapters implement `GatewayAdapter` (00‑types). Adding Adyen / Braintree / PayU later means one more script, no domain change.
 
 #### `payments.methods(bookingId?, { fresh? } = {}, opts?) → Promise<PaymentMethod[]>`
 Methods available for this booking's amount/currency/market: cards, UPI, net‑banking, wallets, Apple/Google Pay, PayPal, BNPL/EMI, bank transfer, pay‑later, OTA wallet, loyalty points, gift cards, vouchers; each with fees and saved instruments.

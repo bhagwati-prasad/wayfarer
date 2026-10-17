@@ -8,6 +8,7 @@ Scripts: `modules/search.js` (I/O + state), `modules/filters.js` (pure), `module
 
 #### `search.create(params: SearchParams, { mode?, autoPoll? = true, tag? = 'search', keepPrevious? = false } = {}, opts?) → Promise<SearchSession>`
 Validate, abort any previous search with the same `tag`, open a session, then (per `mode`) poll or stream until `complete`; offers are merged incrementally, facets/summary recomputed via `filters`, default filters applied, expiry timer armed. Resolves on the **first** batch; later batches arrive through `search:results`.
+`resultMode` defaults to `'per_slice'` (split): the backend is asked for per‑slice results; if it only supports combined offers (Amadeus Flight Offers Search), the SDK issues one one‑way request per slice in parallel, keeps offers flagged `oneWayCombinable`, and fills `sliceOffers[]`. `'combined'` sends the whole trip in one request and fills `offers[]`.
 Effects: net `POST /flights/search`, then `GET /flights/search/{id}` (poll) or `GET /flights/search/{id}/stream` · state `search` · storage `search.history` · timer poll + expiry · emit `search:start`, `search:results`×n, `search:complete|search:error`.
 Throws: `ValidationError`, `SearchExpiredError`.
 

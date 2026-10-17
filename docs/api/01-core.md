@@ -36,7 +36,27 @@ Effects: state all (restore) · emit `state:change`.
 Abort in‑flight requests, stop pollers/timers, unsubscribe listeners, uninstall plugins, flush persistence.
 Effects: net abort · timer clear · storage flush · emit `client:destroyed`.
 
-Namespaces exposed on the client: `http`, `auth`, `store`, `events`, `storage`, `i18n`, `telemetry`, `features`, `logger`, `places`, `content`, `search`, `filters`, `offers`, `itinerary`, `travelers`, `ancillaries`, `booking`, `payments`, `trips`, `account`, `wallet`, `alerts`, `support`, `utils`.
+Namespaces exposed on the client: `http`, `auth`, `access`, `store`, `events`, `storage`, `i18n`, `telemetry`, `features`, `logger`, `endpoints`, `places`, `content`, `search`, `filters`, `offers`, `itinerary`, `travelers`, `ancillaries`, `booking`, `payments` (the injected `PaymentsPort`, or a null port), `trips`, `account`, `wallet`, `alerts`, `support`, `utils`.
+
+### 1.1 `auth/access.js` — access gating
+
+#### `createAccess({ policy: AccessPolicy, auth, events }) → Access`
+Effects: none.
+
+#### `access.levelOf(key: string) → AccessLevel`
+Resolve `'booking.create'` against `rules` (exact key, then `module.*`, then `default`). Effects: none.
+
+#### `access.guard(key, fn) → fn`
+Wrap a module function: `'open'` → call through; `'guest'` → `await auth.ensureGuestSession()` then call; `'auth'` → if not authenticated reject with `AuthError{reason:'unauthenticated', key}` and emit `auth:required` (no network call is made).
+Effects: emit `auth:required` · (guest) see `auth.ensureGuestSession`.
+
+#### `access.can(key) → boolean` · `access.setPolicy(policy) → void` · `access.policy() → AccessPolicy`
+Effects: `setPolicy` emits `access:change`.
+
+Default policy (agencies override any key): `default:'open'`; `'itinerary.*' | 'ancillaries.*' | 'booking.*' | 'payments.*' | 'alerts.createGuest' | 'booking.retrieve' | 'trips.byReference' : 'guest'`; `'travelers.*' | 'trips.*' | 'account.*' | 'wallet.*' | 'alerts.*' | 'support.tickets.*' | 'payments.savedMethods.*' : 'auth'`. Functions that are pure or read‑only reference data stay `'open'`.
+
+#### `core/endpoints.js` — `createEndpoints(overrides?) → { get(key, params?) → string, set(key, template), all() }`
+Path templates per endpoint key (`'search.create' → '/v2/shopping/flight-offers'`, `'offers.reprice' → '/v1/shopping/flight-offers/pricing'`, `'booking.create' → '/v1/booking/flight-orders'`, … SDK‑defined `/v1/...` for everything the Amadeus specs don't cover; full table in `BACKEND-MAPPING.md`). Effects: none.
 
 ---
 
@@ -49,7 +69,7 @@ Deep‑merge with `DEFAULTS`, validate, freeze. Throws `ConfigError`. Effects: n
 Effects: none.
 
 #### `DEFAULTS: ClientConfig`
-`baseUrl https://api.ota.com/v1`, `timeoutMs 20000`, `retries 2`, `auth.strategy 'bearer'`, `auth.tokenStorage 'memory'`, `auth.guest true`, `storage 'local'`, `search.mode 'poll'`, `search.pollIntervalMs 1500`, `search.maxPollMs 45000`, `logger.level 'warn'`, `autoBootstrap true`.
+`baseUrl https://api.ota.com`, `errorFormat 'problem+json'`, `timeoutMs 20000`, `retries 2`, `auth.strategy 'bearer'`, `auth.tokenStorage 'memory'`, `auth.guest true`, `access` (see §1.1), `storage 'local'`, `search.mode 'poll'`, `search.resultMode 'per_slice'`, `search.pollIntervalMs 1500`, `search.maxPollMs 45000`, `logger.level 'warn'`, `autoBootstrap true`.
 
 ---
 
@@ -129,8 +149,8 @@ Order: `prepare → request interceptors (asc priority) → beforeRequest → ca
 | `localeInterceptor({ store })` | `Accept-Language`, `X-Currency`, `X-Market` from `prefs` | none |
 | `correlationInterceptor({ header = 'X-Request-Id', sessionHeader = 'X-Client-Session' })` | Per‑request id + per‑tab session id; echoes server `X-Request-Id` into errors | storage `clientSession` |
 | `idempotencyInterceptor({ header = 'Idempotency-Key' })` | Add key for POST/PUT/PATCH when `spec.idempotencyKey` set (`true` → hash of path+body) | none |
-| `envelopeInterceptor({ dataKey = 'data', metaKey = 'meta', errorsKey = 'errors' })` | Unwrap `{data, meta}` envelopes; attach `meta` to response | none |
-| `errorNormalizerInterceptor({ map? })` | Map `{ status, body.code }` → `SdkError` subclass (`PriceChangedError`, `OfferExpiredError`, `AuthError`, …) | none |
+| `envelopeInterceptor({ dataKey = 'data', metaKey = 'meta', dictionariesKey = 'dictionaries' })` | Unwrap `{data, meta, dictionaries}` envelopes (Amadeus responses carry `dictionaries` for carriers/aircraft/locations); attach `meta` + `dictionaries` to the response for the adapters | none |
+| `problemInterceptor({ map? })` | Parse RFC 9457 `application/problem+json` (`type`, `title`, `status`, `detail`, `instance`, extensions `code`, `errors[]`, `requestId`) → `SdkError` subclass by `code`, then `type`, then `status`; non‑problem bodies fall back to status mapping | none |
 | `rateLimitInterceptor({ maxWaitMs = 10000 })` | On 429 wait `Retry-After` (capped) then `ctx.retry()` | emit `http:retry` · timer |
 | `cacheInterceptor({ storage, defaultTtlMs, methods = ['GET'] })` | Serve / store responses when `spec.cache` set; keys by url+query+locale+currency | storage `cache:*` |
 | `dedupeInterceptor()` | Share the promise of identical in‑flight GETs | none |
@@ -140,14 +160,16 @@ Order: `prepare → request interceptors (asc priority) → beforeRequest → ca
 | `loggingInterceptor({ logger, redact = ['authorization','password','card','documents'] })` | Debug log of request/response with redaction | none |
 | `mockInterceptor(handlers, { delayMs? })` | Dev only: short‑circuit matching requests with fixtures | none |
 
-Default installation order (priority): correlation(10) → apiKey(20) → locale(30) → device(35) → csrf(40) → auth(50) → idempotency(60) → cache(70) → dedupe(80) → logging(90) → telemetry(95); response: envelope(10) → errorNormalizer(20); error: errorNormalizer(10) → auth(20) → rateLimit(30).
+Default installation order (priority): correlation(10) → apiKey(20) → locale(30) → device(35) → csrf(40) → auth(50) → idempotency(60) → cache(70) → dedupe(80) → logging(90) → telemetry(95); response: envelope(10) → problem(20); error: problem(10) → auth(20) → rateLimit(30).
 
 ---
 
 ## 5. `auth/session.js`
 
+Standalone script: it imports only `errors`, `utils` and the `http`/`store`/`events`/`storage` instances it is given. No domain module imports it; they get it through `ctx.auth`. Guest identity: the guest session id is also the **account key** — a guest can search, build an itinerary and book; afterwards `auth.claimAccount` lets the backend send an access link / OTP to the booking contact so the guest can set a password and own the account (bookings made under the guest token are attached to it).
+
 #### `createAuth({ http, store, storage, events, config }) → Auth`
-Effects: storage read (`refreshToken` if persisted) · state `session`.
+Effects: storage read (`refreshToken`, `guestId` if persisted) · state `session`.
 
 #### `auth.getAccessToken() → string|null` · `auth.isAuthenticated() → boolean` · `auth.getUser() → User|null` · `auth.getSessionId() → string|null`
 Synchronous reads. Effects: none.
@@ -164,9 +186,22 @@ Single‑flight token refresh; concurrent callers share one request; requests qu
 Effects: net `POST /auth/refresh` · state `session` · storage · emit `auth:refreshed` | `auth:expired`.
 Throws: `AuthError{reason:'expired'}`.
 
-#### `auth.ensureGuestSession(opts?) → Promise<{ guestId }>`
-Create or reuse an anonymous session so carts / bookings work before login; later `login` merges it (server‑side).
-Effects: net `POST /sessions/guest` (only when none) · state `session.guestId` · storage `guestId` · emit `auth:guest`.
+#### `auth.ensureGuestSession(opts?) → Promise<{ guestId, guestToken }>`
+Create or reuse an anonymous session so carts / bookings work before login; the guest token is sent as `X-Guest-Token` and is the account key for later claim / merge.
+Effects: net `POST /v1/sessions/guest` (only when none) · state `session.guestId`, `session.status='guest'` · storage `guestId`, `guestToken` · emit `auth:guest`.
+
+#### `auth.isGuest() → boolean` · `auth.getGuestToken() → string|null`
+Effects: none.
+
+#### `auth.claimAccount({ bookingId?, channel: 'email'|'sms'|'whatsapp', destination? }, opts?) → Promise<{ sentTo: string, expiresAt: DateTime, challengeId: string }>`
+Ask the backend to message the guest's booking contact with an access link / OTP to take over the account created from the guest session.
+Effects: net `POST /v1/auth/claim` · state `session.claim` · emit `auth:claimSent`.
+Throws: `AuthError{reason:'forbidden'}` (not a guest), `RateLimitError`.
+
+#### `auth.completeClaim({ token?, challengeId?, otp?, password, consents? }, opts?) → Promise<User>`
+Convert the guest session into a full account (keeps all bookings / travelers created under the guest token), set the password, log in.
+Effects: net `POST /v1/auth/claim/complete` · state `session`, `account.user` · storage tokens (guest token removed) · emit `auth:claimed`, `auth:login`.
+Throws: `AuthError{reason:'otp_invalid'|'otp_expired'}`, `ValidationError` (password policy).
 
 #### `auth.register({ email?, phone?, password?, firstName?, lastName?, consents, otpChallengeId? }, opts?) → Promise<User>`
 Create account, log in. Effects: net `POST /auth/register` · state `session`, `account.user` · storage · emit `auth:login`.

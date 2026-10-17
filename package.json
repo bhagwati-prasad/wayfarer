@@ -1,0 +1,92 @@
+{
+  "name": "@wayfarer/sdk",
+  "version": "0.1.0",
+  "description": "Framework-agnostic JavaScript SDK for building an OTA flights frontend against the OTA backend",
+  "license": "UNLICENSED",
+  "type": "module",
+  "sideEffects": [
+    "./dist/styles.css"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./ui": {
+      "types": "./types/ui/index.d.ts",
+      "import": "./dist/ui.js",
+      "require": "./dist/ui.cjs"
+    },
+    "./payments": {
+      "types": "./types/payments/index.d.ts",
+      "import": "./dist/payments.js",
+      "require": "./dist/payments.cjs"
+    },
+    "./payments/stripe": {
+      "types": "./types/payments/adapters/stripe.d.ts",
+      "import": "./dist/payments-stripe.js",
+      "require": "./dist/payments-stripe.cjs"
+    },
+    "./payments/paypal": {
+      "types": "./types/payments/adapters/paypal.d.ts",
+      "import": "./dist/payments-paypal.js",
+      "require": "./dist/payments-paypal.cjs"
+    },
+    "./payments/razorpay": {
+      "types": "./types/payments/adapters/razorpay.d.ts",
+      "import": "./dist/payments-razorpay.js",
+      "require": "./dist/payments-razorpay.cjs"
+    },
+    "./utils": {
+      "types": "./types/utils/index.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
+    },
+    "./mock": {
+      "types": "./types/mock/server.d.ts",
+      "import": "./dist/mock.js",
+      "require": "./dist/mock.cjs"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "types",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "types": "tsc -p tsconfig.types.json",
+    "build": "vite build && vite build -c vite.umd.config.js && npm run types",
+    "docs:check": "node scripts/check-docs.mjs",
+    "check": "npm run lint && npm run docs:check && npm test && npm run types"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^5.0.5",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "jsdom": "^29.1.1",
+    "msw": "^3.0.3",
+    "prettier": "^3.9.10",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}

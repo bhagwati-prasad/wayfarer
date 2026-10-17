@@ -82,6 +82,9 @@ Resume a locked fare into a fresh itinerary (price capped per lock terms). Effec
 #### `itinerary.summary() → ItinerarySummary`
 Compact view model for UI (`route, dates, pax, perPax, total, countdown, items[]`). Effects: none.
 
+#### `itinerary.holdPolicy() → HoldPolicy|null`
+Merged hold policy of the itinerary's offers (backend‑decided per flight; the most restrictive wins). Effects: none.
+
 #### `itinerary.clear({ abandon? = true } = {}) → void`
 Effects: net `DELETE /itineraries/{id}` (best effort, when `abandon`) · state `itinerary`, `ancillaries`, `booking` reset · storage remove · timer clear · emit `itinerary:cleared`.
 

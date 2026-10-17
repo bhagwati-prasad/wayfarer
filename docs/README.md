@@ -1,7 +1,8 @@
 # Wayfarer Flights SDK — API Reference (v0 draft)
 
 Framework‑agnostic JavaScript SDK that lets an OTA build its entire flights frontend
-against the OTA backend (assumed at `https://api.ota.com/v1`). It covers search,
+against the OTA backend (assumed at `https://api.ota.com`; it exposes the Amadeus flight APIs
+whose specs sit in `amadeus/`, plus OTA‑specific endpoints — see `BACKEND-MAPPING.md`). It covers search,
 offer selection, itinerary building, traveler capture, ancillaries, booking, payment,
 post‑booking servicing (change / cancel / refunds / disruptions), traveler profiles,
 account, wallet / loyalty, price alerts, and a separate, optional UI layer.
@@ -37,6 +38,9 @@ Side‑effect vocabulary (an entry lists only the kinds it has; `none` = pure fu
 Conventions that apply everywhere and are therefore not repeated per entry:
 
 - Every network function accepts a trailing `opts?: RequestOpts` (see `api/00-types.md`) and rejects with an `SdkError` subclass (see `api/02-state-events-errors.md`). The `Throws:` line appears only for domain‑specific errors.
+- Backend errors are RFC 9457 `application/problem+json`; the SDK maps `status` / `type` / `code` to `SdkError` subclasses and keeps the problem document on `error.problem`.
+- Access gating: every public function has an access key (`search.create`, `trips.*`, …) resolved against `config.access` to `'open' | 'guest' | 'auth'`. `'guest'` silently ensures a guest session; `'auth'` rejects with `AuthError{reason:'unauthenticated'}` and emits `auth:required` **before** any network call. Defaults are in `api/01-core.md §1.1`.
+- Wire adapters: endpoints backed by Amadeus‑shaped payloads go through `src/adapters/amadeus/*` so the domain model in `00-types.md` is the only shape UI code ever sees; the untouched payload stays on `raw`.
 - Every function that writes the store also emits `state:change`; it is not repeated.
 - Every `net` call passes through the HTTP lifecycle (interceptors + hooks) described in `api/01-core.md §3`.
 - Getters ending in `current()` / `get*()` without `opts` are synchronous reads of the store.
@@ -60,8 +64,10 @@ Conventions that apply everywhere and are therefore not repeated per entry:
 | `api/08-trips.md` | `trips` (upcoming / past / cancelled, change, cancel, refunds, disruptions, check‑in, requests), `support` |
 | `api/09-account.md` | `account` (profile, security, consents, GDPR), `wallet` (wallet, loyalty, coupons, gift cards, vouchers, referrals), `alerts` (price alerts, saved searches, favourites) |
 | `api/10-ui.md` | UI builders: search form, results, filters, details, summary, traveler forms, seat map, payment form, confirmation, trips, account, price insights, primitives |
+| `BACKEND-MAPPING.md` | Amadeus spec → SDK function/type mapping, conflicts, gaps the OTA backend must fill |
+| `CONTRIBUTING.md` | Internal conventions: module factory contract, `ctx`, slices, events, tests, mocks |
 | `RESEARCH.md` | Feature matrix across OTAs / flight APIs → which module covers each |
-| `QUESTIONS.md` | Open decisions with proposed defaults |
+| `QUESTIONS.md` | Decision log (answered) + remaining open items with defaults |
 
 ---
 
@@ -74,7 +80,9 @@ src/
   core/config.js                defaults, validation, defineConfig
   http/client.js                fetch wrapper, lifecycle, retries, abort, cache, dedupe, streams
   http/interceptors.js          built‑in interceptor factories (auth, locale, idempotency, envelope, …)
-  auth/session.js               tokens, refresh (single‑flight), guest sessions, login/register/logout
+  auth/session.js               STANDALONE: tokens, refresh (single‑flight), guest sessions, login/register/logout,
+                                guest→account claim. No other script is merged into it; modules receive it via ctx
+  auth/access.js                access policy resolver + guard (open / guest / auth per function key)
   state/store.js                slices, select/subscribe, batch, persist/hydrate, middleware, devtools
   events/emitter.js             typed event bus (on/once/off/emit/waitFor, wildcards)
   errors/index.js               SdkError hierarchy + normalisation helpers
@@ -90,7 +98,13 @@ src/
   modules/travelers.js          saved traveler profiles, documents, loyalty, validation, drafts
   modules/ancillaries.js        catalog, seats, baggage, meals, insurance, protections, extras, bundles
   modules/booking.js            create / hold / status polling / documents / guest retrieve / calendar / share
-  modules/payments.js           methods, quotes, intents, gateway adapters, actions (3DS/UPI), credits, redirects
+  payments/index.js             ISOLATED payments package (entry @wayfarer/sdk/payments): methods, quotes, intents,
+                                actions (3DS/UPI/redirect), credits, resume. Domain code sees only the PaymentsPort
+  payments/port.js              PaymentsPort interface + null port (booking works up to pending_payment without it)
+  payments/adapters/stripe.js   payments/adapters/paypal.js   payments/adapters/razorpay.js
+  adapters/amadeus/search.js    pricing.js  upsell.js  availability.js  orders.js  common.js
+                                wire ↔ domain converters for the Amadeus‑shaped endpoints (see BACKEND-MAPPING.md)
+  core/endpoints.js             endpoint key → path template map (Amadeus paths for covered ops, /v1/… otherwise)
   modules/trips.js              my trips, change, cancel, refunds, disruptions, check‑in, post‑booking add‑ons, requests
   modules/account.js            profile, preferences, addresses, notifications, sessions, MFA, consents, GDPR
   modules/wallet.js             wallet, loyalty, coupons, gift cards, vouchers, referrals
@@ -100,11 +114,12 @@ src/
   ui/core.js  primitives.js  search-form.js  results.js  filters.js  offer-details.js
   ui/itinerary-summary.js  traveler-form.js  ancillaries.js  payment-form.js  confirmation.js
   ui/trips.js  account.js  price-insights.js  styles.css
-  mock/server.js  mock/fixtures/*.json   MSW handlers for ota.com (dev / tests only; entry `@wayfarer/sdk/mock`)
+  mock/server.js  mock/handlers/*.js  mock/fixtures/*.json   MSW handlers for ota.com (dev / tests; entry `@wayfarer/sdk/mock`)
+  bindings/react.js  vue.js  angular.js   (later) thin wrappers over store.subscribe / store.toObservable
 types/                          generated .d.ts (JSDoc → d.ts)
 ```
 
-Entry points: `@wayfarer/sdk` (core + modules), `@wayfarer/sdk/ui`, `@wayfarer/sdk/utils`, `@wayfarer/sdk/mock`, `@wayfarer/sdk/styles.css`. ESM + CJS + UMD (`window.Wayfarer`). Tree‑shakeable; zero runtime dependencies in core.
+Entry points: `@wayfarer/sdk` (core + modules), `@wayfarer/sdk/payments` (+ `/payments/stripe|paypal|razorpay`), `@wayfarer/sdk/ui`, `@wayfarer/sdk/utils`, `@wayfarer/sdk/mock`, `@wayfarer/sdk/styles.css`. ESM + CJS + UMD (`window.Wayfarer`). Tree‑shakeable; zero runtime dependencies in core.
 
 ---
 
@@ -125,7 +140,7 @@ spec ─▶ prepare ─▶ request interceptors ─▶ hook beforeRequest ─▶
 | hook `afterResponse` | no | timing, raw status logging |
 | `parse` | — | json / blob / text by `responseType` |
 | `response` interceptors | data | envelope unwrapping, token rotation from headers, pagination meta |
-| `error` interceptors | error → Response or Error | 401 → `auth.refresh()` then `ctx.retry()`; 429 → wait `Retry-After`; map API codes → `SdkError` subclasses |
+| `error` interceptors | error → Response or Error | 401 → `auth.refresh()` then `ctx.retry()`; 429 → wait `Retry-After`; parse RFC 9457 problem → `SdkError` subclass |
 | hook `onRetry` / `onAbort` / `onTimeout` | no | metrics |
 
 Full API in `api/01-core.md §3`.
@@ -164,13 +179,13 @@ Persistence defaults: `session` (refresh token only when `auth.strategy = 'beare
 | namespace | events |
 |---|---|
 | http | `http:request`, `http:response`, `http:error`, `http:retry`, `http:abort` |
-| auth | `auth:login`, `auth:logout`, `auth:refreshed`, `auth:expired`, `auth:guest`, `auth:mfaRequired` |
+| auth | `auth:login`, `auth:logout`, `auth:refreshed`, `auth:expired`, `auth:guest`, `auth:mfaRequired`, `auth:required`, `auth:claimSent`, `auth:claimed` |
 | client | `client:ready`, `client:destroyed`, `bootstrap:loaded`, `prefs:change`, `features:change` |
 | search | `search:start`, `search:results`, `search:complete`, `search:error`, `search:cancelled`, `search:expiring`, `search:expired`, `search:filtersChange`, `search:sortChange` |
 | offer | `offer:selected`, `offer:deselected`, `offer:priceChanged`, `offer:expired`, `offer:unavailable`, `offer:fareFamilyChanged` |
 | itinerary | `itinerary:created`, `itinerary:updated`, `itinerary:priceChanged`, `itinerary:expiring`, `itinerary:expired`, `itinerary:travelersSet`, `itinerary:promoApplied`, `itinerary:promoRemoved`, `itinerary:locked`, `itinerary:cleared` |
 | ancillaries | `ancillaries:changed`, `seats:changed`, `insurance:changed`, `protections:changed` |
-| booking | `booking:created`, `booking:held`, `booking:statusChanged`, `booking:confirmed`, `booking:ticketed`, `booking:failed`, `booking:abandoned` |
+| booking | `booking:created`, `booking:held`, `booking:holdExpiring`, `booking:holdExpired`, `booking:statusChanged`, `booking:confirmed`, `booking:ticketed`, `booking:failed`, `booking:abandoned` |
 | payment | `payment:intentCreated`, `payment:actionRequired`, `payment:processing`, `payment:succeeded`, `payment:failed`, `payment:cancelled`, `payment:redirecting` |
 | trips | `trips:loaded`, `trip:loaded`, `trip:changeQuoted`, `trip:changed`, `trip:cancelQuoted`, `trip:cancelled`, `trip:refundUpdated`, `trip:disruption`, `trip:requestSubmitted` |
 | profile | `travelers:changed`, `account:updated`, `wallet:updated`, `alerts:changed`, `support:ticketUpdated` |
@@ -195,6 +210,7 @@ post‑booking: trips.list ─▶ trips.get ─▶ trips.changes.* | trips.cance
 Status machines:
 
 - `SearchSession.status`: `pending → streaming → complete | expired | error | cancelled`
+- Result mode: **`per_slice` (split) is the default**; the frontend may request `combined`. When the backend only returns combined offers (Amadeus Flight Offers Search), the SDK fans out one search per slice and keeps `oneWayCombinable` offers; `offers.combine` prices the chosen slices together (Flight Offers Price accepts several offers).
 - `Itinerary.status`: `active → (priceChanged) → booked | expired | abandoned`
 - `Booking.status`: `draft → pending_payment | on_hold → processing → confirmed → ticketed | partially_ticketed | failed | cancelled | refunded | expired`
 - `PaymentIntent.status`: `requires_method → requires_confirmation → requires_action → processing → succeeded | failed | cancelled`

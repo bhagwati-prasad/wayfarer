@@ -47,7 +47,7 @@ interface SearchParams {
   fareTypes?: FareType[]; directOnly?: boolean; maxStops?: 0|1|2; includeNearby?: boolean;
   airlines?: { include?: string[]; exclude?: string[] }; alliances?: string[];
   refundableOnly?: boolean; baggageIncluded?: boolean; allowSelfTransfer?: boolean; allowMixedCabin?: boolean;
-  maxDurationMinutes?: number; currency?: string; resultMode?: 'combined'|'per_slice'|'auto';
+  maxDurationMinutes?: number; currency?: string; resultMode?: 'per_slice'|'combined';   // default per_slice (split)
   context?: { bookingId?: string; sliceIds?: string[] }      // reshop for a change
 }
 interface SearchSession {
@@ -63,8 +63,12 @@ interface Offer {
   fareFamily?: FareFamily; baggage: BaggageAllowance; conditions: Conditions;
   tags: ('cheapest'|'fastest'|'best'|'earliest'|'recommended'|string)[]; expiresAt: DateTime;
   tickets?: TicketGroup[];         // >1 = multi‑ticket / virtual interlining
-  selfTransfer?: boolean; seatsLeft?: number; emissionsKg?: number; source?: string
+  selfTransfer?: boolean; seatsLeft?: number; emissionsKg?: number; source?: string;
+  hold?: HoldPolicy;               // backend‑decided per flight: free / paid / none
+  lastTicketingDate?: DateStr; validatingAirlines?: string[]; oneWayCombinable?: boolean;
+  raw?: unknown                    // untouched wire payload (e.g. Amadeus FlightOffer)
 }
+interface HoldPolicy { allowed: boolean; freeUntil?: DateTime; options: HoldOption[]; note?: string }
 interface SliceOffer extends Offer { sliceIndex: number; combinableWith?: string[] }
 interface Slice { id: string; origin: Place; destination: Place; departureAt: DateTime; arrivalAt: DateTime;
   durationMinutes: number; stops: number; segments: Segment[]; layovers: Layover[]; fareBrand?: string; dayChange: number }
@@ -161,7 +165,7 @@ interface Booking { id: string; reference: string; type: 'flight'|'price_lock'; 
 interface BookingFailure { code: string; message: string; recoverable: boolean; suggestedAction: 'retry_payment'|'search_again'|'contact_support'|'wait' }
 interface PaymentSummary { total: Money; paid: Money; due: Money; dueBy?: DateTime; methods: { type: string; last4?: string; amount: Money }[] }
 interface Document { type: 'eticket'|'invoice'|'gst_invoice'|'receipt'|'insurance_policy'|'visa_letter'|string; label: string; url?: string; available: boolean }
-interface HoldOption { id: string; label: string; fee: Money; holdUntil: DateTime; refundableFee: boolean }
+interface HoldOption { id: string; label: string; fee: Money; holdUntil: DateTime; refundableFee: boolean; onExpiry: 'drop'|'charge'|'convert_to_paid' }
 interface PriceLockOption { id: string; durationHours: number; fee: Money; capAmount?: Money; terms: string }
 
 type PaymentMethodType = 'card'|'upi'|'netbanking'|'wallet'|'apple_pay'|'google_pay'|'paypal'|'bnpl'|'emi'|'bank_transfer'|'pay_later'|'loyalty_points'|'gift_card'|'ota_wallet'|'voucher'
@@ -182,6 +186,11 @@ interface GatewayAdapter { name: string; load(opts: object): Promise<void>; moun
   confirm?(intent: PaymentIntent, el?: GatewayElement): Promise<{ status: string; payload?: object }>;
   handleAction?(action: PaymentAction, host: HTMLElement): Promise<{ status: string; payload?: object }>; unmount?(el: GatewayElement): void }
 interface GatewayElement { el: HTMLElement; isComplete(): boolean; on(evt: 'change'|'ready'|'error', fn: Function): () => void }
+// The isolated payments package implements this port; domain modules depend on nothing else from it.
+interface PaymentsPort { methods; quote; credits; emiPlans; createIntent; mount; tokenize; confirm; handleAction; waitForResult; pay; resumeAfterRedirect; cancel; retry; intent; status; savedMethods; receipt; refunds; gateways; clear }  // see 07-booking.md §2
+// RFC 9457 problem document as returned by the backend (extension members: code, errors, requestId)
+interface Problem { type: string; title: string; status: number; detail?: string; instance?: string; code?: string; requestId?: string;
+  errors?: { code?: string|number; title?: string; detail?: string; source?: { pointer?: string; parameter?: string; example?: string } }[]; [ext: string]: unknown }
 interface Refund { id: string; bookingId: string; amount: Money; method: string; status: 'requested'|'processing'|'completed'|'failed'; eta?: DateTime; updatedAt: DateTime }
 
 // ── trips / servicing ─────────────────────────────────────────────────────
@@ -216,8 +225,14 @@ interface Ticket { id: string; subject: string; category: string; status: 'open'
   messages: { id: string; from: 'user'|'agent'; text: string; at: DateTime; attachments?: string[] }[]; updatedAt: DateTime }
 
 // ── client ────────────────────────────────────────────────────────────────
+type AccessLevel = 'open'|'guest'|'auth'
+interface AccessPolicy { default?: AccessLevel; rules?: Record<string, AccessLevel> }   // keys: 'search.*', 'booking.create', 'trips.*', …
+type EndpointKey = string                                                            // e.g. 'search.create', 'booking.create' (see core/endpoints.js)
 interface ClientConfig {
-  baseUrl?: string;                      // default https://api.ota.com/v1
+  baseUrl?: string;                      // default https://api.ota.com (paths carry their own version prefix)
+  endpoints?: Partial<Record<EndpointKey, string>>;  // override any path template
+  access?: AccessPolicy;                 // which functions need auth / guest / nothing
+  errorFormat?: 'problem+json'|'envelope';           // default problem+json (RFC 9457)
   apiKey?: string; clientId?: string;    // public partner / app identifiers
   locale?: string; currency?: string; market?: string;
   fetch?: typeof fetch; timeoutMs?: number; retries?: number;
@@ -227,7 +242,7 @@ interface ClientConfig {
   interceptors?: { request?: Interceptor[]; response?: Interceptor[]; error?: Interceptor[] };
   hooks?: Partial<Record<HookName, HookFn>>;
   search?: { mode: 'poll'|'single'|'stream'; pollIntervalMs?: number; maxPollMs?: number; resultMode?: 'combined'|'per_slice'|'auto' };
-  payments?: { gateways?: GatewayAdapter[]; returnUrl?: string };
+  payments?: PaymentsPort;               // from @wayfarer/sdk/payments: createPayments({ gateways: [stripe(), paypal(), razorpay()], returnUrl })
   telemetry?: { adapters?: TelemetryAdapter[]; enabled?: boolean; sampleRate?: number };
   features?: Record<string, boolean|string>; i18n?: { messages?: object; fallback?: string };
   logger?: { level: 'silent'|'error'|'warn'|'info'|'debug'; sink?: Function; redact?: string[] };
