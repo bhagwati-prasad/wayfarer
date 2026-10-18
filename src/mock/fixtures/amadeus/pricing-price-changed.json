@@ -1,0 +1,414 @@
+{
+  "warnings": [
+    {
+      "status": 200,
+      "code": 37200,
+      "title": "PRICE DISCREPANCY",
+      "detail": "Current grandTotal price (34411.54) is different from request (32017.54)",
+      "source": { "pointer": "/data/flightOffers/0/price/grandTotal" }
+    }
+  ],
+  "data": {
+    "type": "flight-offers-pricing",
+    "flightOffers": [
+      {
+        "type": "flight-offer",
+        "id": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "nonHomogeneous": false,
+        "oneWay": false,
+        "paymentCardRequired": false,
+        "lastTicketingDate": "2026-10-21",
+        "numberOfBookableSeats": 4,
+        "itineraries": [
+          {
+            "duration": "PT2H15M",
+            "segments": [
+              {
+                "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+                "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+                "carrierCode": "AI",
+                "number": "865",
+                "aircraft": { "code": "321" },
+                "operating": { "carrierCode": "AI" },
+                "duration": "PT2H15M",
+                "id": "2",
+                "numberOfStops": 0,
+                "blacklistedInEU": false,
+                "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+              }
+            ]
+          },
+          {
+            "duration": "PT2H10M",
+            "segments": [
+              {
+                "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+                "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+                "carrierCode": "AI",
+                "number": "864",
+                "aircraft": { "code": "321" },
+                "operating": { "carrierCode": "AI" },
+                "duration": "PT2H10M",
+                "id": "11",
+                "numberOfStops": 0,
+                "blacklistedInEU": false,
+                "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+              }
+            ]
+          }
+        ],
+        "price": {
+          "currency": "INR",
+          "total": "34411.54",
+          "base": "30195.75",
+          "fees": [
+            { "amount": "0.00", "type": "SUPPLIER" },
+            { "amount": "0.00", "type": "TICKETING" },
+            { "amount": "0.00", "type": "FORM_OF_PAYMENT" }
+          ],
+          "grandTotal": "34411.54",
+          "billingCurrency": "INR"
+        },
+        "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+        "validatingAirlineCodes": ["AI"],
+        "travelerPricings": [
+          {
+            "travelerId": "1",
+            "fareOption": "STANDARD",
+            "travelerType": "ADULT",
+            "price": {
+              "currency": "INR",
+              "total": "12026.75",
+              "base": "10595.00",
+              "taxes": [
+                { "amount": "529.75", "code": "K3" },
+                { "amount": "248.00", "code": "IN" },
+                { "amount": "182.00", "code": "P2" },
+                { "amount": "472.00", "code": "WO" }
+              ],
+              "refundableTaxes": "902.00"
+            },
+            "fareDetailsBySegment": [
+              {
+                "segmentId": "2",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              },
+              {
+                "segmentId": "11",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              }
+            ]
+          },
+          {
+            "travelerId": "2",
+            "fareOption": "STANDARD",
+            "travelerType": "ADULT",
+            "price": {
+              "currency": "INR",
+              "total": "12026.75",
+              "base": "10595.00",
+              "taxes": [
+                { "amount": "529.75", "code": "K3" },
+                { "amount": "248.00", "code": "IN" },
+                { "amount": "182.00", "code": "P2" },
+                { "amount": "472.00", "code": "WO" }
+              ],
+              "refundableTaxes": "902.00"
+            },
+            "fareDetailsBySegment": [
+              {
+                "segmentId": "2",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              },
+              {
+                "segmentId": "11",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              }
+            ]
+          },
+          {
+            "travelerId": "3",
+            "fareOption": "STANDARD",
+            "travelerType": "CHILD",
+            "price": {
+              "currency": "INR",
+              "total": "9245.56",
+              "base": "7946.25",
+              "taxes": [
+                { "amount": "397.31", "code": "K3" },
+                { "amount": "248.00", "code": "IN" },
+                { "amount": "182.00", "code": "P2" },
+                { "amount": "472.00", "code": "WO" }
+              ],
+              "refundableTaxes": "902.00"
+            },
+            "fareDetailsBySegment": [
+              {
+                "segmentId": "2",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              },
+              {
+                "segmentId": "11",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                "additionalServices": {
+                  "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                },
+                "mealServices": [{ "label": "Meal" }]
+              }
+            ]
+          },
+          {
+            "travelerId": "4",
+            "fareOption": "STANDARD",
+            "travelerType": "HELD_INFANT",
+            "associatedAdultId": "1",
+            "price": {
+              "currency": "INR",
+              "total": "1112.48",
+              "base": "1059.50",
+              "taxes": [{ "amount": "52.98", "code": "K3" }],
+              "refundableTaxes": "0.00"
+            },
+            "fareDetailsBySegment": [
+              {
+                "segmentId": "2",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" }
+              },
+              {
+                "segmentId": "11",
+                "cabin": "ECONOMY",
+                "fareBasis": "WU1YXSII",
+                "brandedFare": "ECOVALUE",
+                "brandedFareLabel": "ECO VALUE",
+                "class": "W",
+                "includedCheckedBags": { "weight": 15, "weightUnit": "KG" }
+              }
+            ]
+          }
+        ],
+        "fareRules": {
+          "currency": "INR",
+          "rules": [
+            {
+              "category": "EXCHANGE",
+              "maxPenaltyAmount": "3000.00",
+              "isChargeable": true,
+              "descriptions": [
+                {
+                  "descriptionType": "PENALTIES",
+                  "text": "CHANGES PERMITTED UP TO 2 HOURS BEFORE DEPARTURE AGAINST A FEE OF INR 3000 PER PASSENGER PLUS FARE DIFFERENCE"
+                }
+              ]
+            },
+            {
+              "category": "REFUND",
+              "maxPenaltyAmount": "3500.00",
+              "isChargeable": true,
+              "descriptions": [
+                {
+                  "descriptionType": "PENALTIES",
+                  "text": "CANCELLATION PERMITTED UP TO 2 HOURS BEFORE DEPARTURE AGAINST A FEE OF INR 3500 PER PASSENGER. NO SHOW NON REFUNDABLE EXCEPT TAXES"
+                }
+              ]
+            },
+            { "category": "REVALIDATION", "notApplicable": true }
+          ]
+        }
+      }
+    ],
+    "bookingRequirements": {
+      "emailAddressRequired": true,
+      "mobilePhoneNumberRequired": true,
+      "phoneCountryCodeRequired": true,
+      "travelerRequirements": [
+        {
+          "travelerId": "1",
+          "genderRequired": true,
+          "dateOfBirthRequired": true,
+          "documentRequired": false
+        },
+        {
+          "travelerId": "2",
+          "genderRequired": true,
+          "dateOfBirthRequired": true,
+          "documentRequired": false
+        },
+        {
+          "travelerId": "3",
+          "genderRequired": true,
+          "dateOfBirthRequired": true,
+          "documentRequired": false
+        },
+        {
+          "travelerId": "4",
+          "genderRequired": true,
+          "dateOfBirthRequired": true,
+          "documentRequired": false,
+          "residenceRequired": false
+        }
+      ],
+      "threeDomainSecureRequirements": [
+        { "flightOfferIds": ["1"], "is3dsAuthenticationRequired": true }
+      ]
+    }
+  },
+  "included": {
+    "credit-card-fees": {
+      "1": { "brand": "VISA", "amount": "0.00", "currency": "INR", "flightOfferId": "1" },
+      "2": { "brand": "MASTERCARD", "amount": "0.00", "currency": "INR", "flightOfferId": "1" },
+      "3": {
+        "brand": "AMERICAN_EXPRESS",
+        "amount": "1250.00",
+        "currency": "INR",
+        "flightOfferId": "1"
+      }
+    },
+    "bags": {
+      "1": {
+        "quantity": 1,
+        "weight": 10,
+        "weightUnit": "KG",
+        "name": "CHECKED_BAG",
+        "price": { "amount": "1500.00", "currencyCode": "INR" },
+        "bookableByItinerary": false,
+        "segmentIds": ["2", "11"],
+        "travelerIds": ["1", "2", "3"]
+      },
+      "2": {
+        "quantity": 1,
+        "weight": 15,
+        "weightUnit": "KG",
+        "name": "CHECKED_BAG",
+        "price": { "amount": "2250.00", "currencyCode": "INR" },
+        "bookableByItinerary": false,
+        "segmentIds": ["2", "11"],
+        "travelerIds": ["1", "2", "3"]
+      }
+    },
+    "other-services": {
+      "1": {
+        "name": "PRIORITY_BOARDING",
+        "price": { "amount": "499.00", "currencyCode": "INR" },
+        "bookableByTraveler": true,
+        "bookableByItinerary": false,
+        "segmentIds": ["2", "11"],
+        "travelerIds": ["1", "2", "3"],
+        "descriptions": ["PRIORITY BOARDING"]
+      },
+      "2": {
+        "name": "AIRPORT_CHECKIN",
+        "price": { "amount": "200.00", "currencyCode": "INR" },
+        "bookableByTraveler": true,
+        "bookableByItinerary": false,
+        "segmentIds": ["2", "11"],
+        "travelerIds": ["1", "2", "3"],
+        "descriptions": ["AIRPORT CHECK IN COUNTER ASSISTANCE"]
+      },
+      "3": {
+        "name": "FAST_TRACK",
+        "price": { "amount": "350.00", "currencyCode": "INR" },
+        "bookableByTraveler": true,
+        "bookableByItinerary": true,
+        "segmentIds": ["2"],
+        "travelerIds": ["1", "2", "3"],
+        "descriptions": ["FAST TRACK SECURITY DEL T3"]
+      }
+    },
+    "detailed-fare-rules": {
+      "1": {
+        "fareBasis": "WU1YXSII",
+        "name": "ECONOMY VALUE",
+        "segmentId": "2",
+        "fareNotes": {
+          "descriptions": [
+            {
+              "descriptionType": "PENALTIES",
+              "text": "CANCELLATIONS\n  BEFORE DEPARTURE\n    CHARGE INR 3500 FOR CANCEL/REFUND.\n  AFTER DEPARTURE\n    TICKET IS NON-REFUNDABLE EXCEPT UNUSED TAXES.\nCHANGES\n  BEFORE DEPARTURE\n    CHARGE INR 3000 FOR REISSUE/REVALIDATION PLUS FARE DIFFERENCE."
+            },
+            { "descriptionType": "MIN STAY", "text": "NONE" },
+            {
+              "descriptionType": "MAX STAY",
+              "text": "TRAVEL FROM LAST STOPOVER MUST COMMENCE NO LATER THAN 12 MONTHS AFTER DEPARTURE FROM FARE ORIGIN."
+            }
+          ]
+        }
+      },
+      "2": {
+        "fareBasis": "WU1YXSII",
+        "name": "ECONOMY VALUE",
+        "segmentId": "11",
+        "fareNotes": {
+          "descriptions": [
+            {
+              "descriptionType": "PENALTIES",
+              "text": "CANCELLATIONS\n  BEFORE DEPARTURE\n    CHARGE INR 3500 FOR CANCEL/REFUND.\nCHANGES\n  BEFORE DEPARTURE\n    CHARGE INR 3000 FOR REISSUE/REVALIDATION PLUS FARE DIFFERENCE."
+            }
+          ]
+        }
+      }
+    }
+  },
+  "dictionaries": {
+    "locations": {
+      "BOM": { "cityCode": "BOM", "countryCode": "IN" },
+      "DEL": { "cityCode": "DEL", "countryCode": "IN" }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 36870,
+      "title": "BOOKING FAILED",
+      "detail": "The airline rejected the booking request, no PNR was created"
+    }
+  ]
+}

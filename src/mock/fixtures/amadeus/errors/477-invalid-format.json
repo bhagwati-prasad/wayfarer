@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 477,
+      "title": "INVALID FORMAT",
+      "detail": "Date 2030-13-45 is not a valid date",
+      "source": { "pointer": "/data/travelers/1/documents/0/expiryDate" }
+    }
+  ]
+}

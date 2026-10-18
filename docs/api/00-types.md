@@ -48,7 +48,9 @@ interface SearchParams {
   airlines?: { include?: string[]; exclude?: string[] }; alliances?: string[];
   refundableOnly?: boolean; baggageIncluded?: boolean; allowSelfTransfer?: boolean; allowMixedCabin?: boolean;
   maxDurationMinutes?: number; currency?: string; resultMode?: 'per_slice'|'combined';   // default per_slice (split)
-  context?: { bookingId?: string; sliceIds?: string[] }      // reshop for a change
+  context?: { bookingId?: string; sliceIds?: string[] };     // reshop for a change
+  nearbyRadiusKm?: number; corporateCodes?: string[]; sources?: string[];   // provider passthroughs: nearby radius (km), negotiated-fare codes, content sources
+  via?: { include?: IATA[]; exclude?: IATA[] }               // connection points to prefer / avoid
 }
 interface SearchSession {
   id: string; status: 'pending'|'streaming'|'complete'|'expired'|'error'|'cancelled';
@@ -56,7 +58,8 @@ interface SearchSession {
   offers: Offer[];                 // combined mode
   sliceOffers?: SliceOffer[][];    // per_slice mode: one array per slice
   facets: Facets; summary: ResultsSummary; insights?: PriceInsight;
-  meta: { total: number; currency: string; expiresAt: DateTime; providersPending: number; cursor?: string }
+  meta: { total: number; currency: string; expiresAt: DateTime; providersPending: number; cursor?: string;
+    sessionMode?: 'native_split'|'fanout'|'combined'; warnings?: Issue[] }   // how per_slice results were produced; provider warnings
 }
 interface Offer {
   id: string; owner: Airline; slices: Slice[]; price: PriceBreakdown; passengers: PaxPrice[];
@@ -66,6 +69,15 @@ interface Offer {
   selfTransfer?: boolean; seatsLeft?: number; emissionsKg?: number; source?: string;
   hold?: HoldPolicy;               // backend‑decided per flight: free / paid / none
   lastTicketingDate?: DateStr; validatingAirlines?: string[]; oneWayCombinable?: boolean;
+  ticketingDeadline?: { date: DateStr; dateTime?: DateTime };   // lastTicketingDate / lastTicketingDateTime as returned
+  bookableSeats?: number;          // seats bookable in one request (1..9, 9 = "9 or more"); seatsLeft stays the backend scarcity signal
+  instantTicketingRequired?: boolean; paymentCardRequired?: boolean; multiplePnrs?: boolean;   // multiplePnrs = several records (nonHomogeneous)
+  isUpsell?: boolean; upsellOfferIds?: string[]; sourceReference?: string;   // branded-fare upsell links; provider-side reference
+  pricingOptions?: { fareType?: ('published'|'negotiated'|'corporate')[]; corporateCodes?: string[]; includedCheckedBagsOnly?: boolean;
+    refundableFare?: boolean; noRestrictionFare?: boolean; noPenaltyFare?: boolean };   // fare filters the offer was priced with
+  billing?: Money;                 // grand total in the billing currency when it differs from the display currency
+  fareOptions?: string[];          // fare option codes, e.g. STANDARD, INCLUSIVE_TOUR, SPANISH_CANARY_RESIDENT
+  warnings?: Issue[];              // non-blocking provider warnings attached to the offer
   raw?: unknown                    // untouched wire payload (e.g. Amadeus FlightOffer)
 }
 interface HoldPolicy { allowed: boolean; freeUntil?: DateTime; options: HoldOption[]; note?: string }
@@ -75,20 +87,29 @@ interface Slice { id: string; origin: Place; destination: Place; departureAt: Da
 interface Segment { id: string; marketingCarrier: Airline; operatingCarrier: Airline; flightNumber: string;
   aircraft?: Aircraft; origin: Place; destination: Place; departureAt: DateTime; arrivalAt: DateTime;
   durationMinutes: number; cabin: CabinClass; bookingClass?: string; fareBasis?: string;
-  terminals?: { from?: string; to?: string }; amenities?: Amenity[]; distanceKm?: number; onTimePct?: number }
+  terminals?: { from?: string; to?: string }; amenities?: Amenity[]; distanceKm?: number; onTimePct?: number;
+  localTimeOnly?: boolean;         // departureAt / arrivalAt carry no UTC offset (airport time zone unknown)
+  technicalStops?: { airport: Place; arrivalAt: DateTime; departureAt: DateTime; durationMinutes: number }[];   // stops without a change of flight
+  blacklistedInEU?: boolean; emissionsKg?: number;             // EU air-safety list; CO2 estimate for this segment
+  status?: 'confirmed'|'waitlisted'|'cancelled'|'pending'|'denied'; flown?: boolean; segmentType?: 'active'|'passive'|'ghost'|'staff';   // post-booking
+  cabinByPaxType?: Partial<Record<PaxType, CabinClass>>; brandedFare?: string;   // when cabin / brand differ per passenger type or segment
+  includedCheckedBags?: { quantity?: number; weightKg?: number } }   // allowance passthrough for this segment
 interface Layover { airport: Place; durationMinutes: number; overnight: boolean; selfTransfer: boolean; airportChange: boolean }
-interface Amenity { type: 'wifi'|'power'|'meal'|'entertainment'|'seat_pitch'|'legroom'|string; value?: string; paid?: boolean }
+interface Amenity { type: 'wifi'|'power'|'meal'|'entertainment'|'seat_pitch'|'legroom'|'baggage'|'lounge'|'miles'|'fare_feature'|string; value?: string; paid?: boolean;
+  code?: string; label?: string }  // provider amenity code and its display label
 interface TicketGroup { id: string; segmentIds: string[]; carrier: Airline }
-interface PaxPrice { type: PaxType; count: number; unit: PriceBreakdown }
+interface PaxPrice { type: PaxType; count: number; unit: PriceBreakdown; fareOption?: string; travelerIds?: string[] }   // fare option code and provider traveler ids of the group
 interface PriceBreakdown { total: Money; base: Money; taxes: Money; fees: Money; discounts?: Money;
-  ancillaries?: Money; perPax: Money; items?: { code: string; label: string; amount: Money }[] }
+  ancillaries?: Money; perPax: Money; items?: { code: string; label: string; amount: Money }[];
+  billing?: Money; refundableTaxes?: Money; margins?: { type: 'agent_markup'|'agent_fee'|string; amount: Money }[] }   // billing-currency total, refundable taxes, agency margins
 interface Conditions { refundable: boolean|'partial'; changeable: boolean; changePenalty?: Money; cancelPenalty?: Money;
   holdAllowed?: boolean; voidUntil?: DateTime; notes?: string[] }
 interface BaggageAllowance { bySegment?: boolean; items: { paxType: PaxType; segmentId?: string;
   cabin: BagRule[]; checked: BagRule[] }[] }
 interface BagRule { quantity?: number; weightKg?: number; dimensionsCm?: string; included: boolean; price?: Money }
 interface FareFamily { code: string; name: string; tier: number; offerId?: string; priceDelta: Money;
-  features: { code: string; label: string; included: boolean|'fee'; detail?: string }[] }
+  features: { code: string; label: string; included: boolean|'fee'; detail?: string; type?: string }[];
+  isCurrent?: boolean; sliceIndex?: number; brandedFareBySegment?: Record<string, string> }   // brand of the base offer; per-slice upsell; brand code per segment id
 interface FareRules { summary: Conditions; penalties: { type: 'change'|'cancel'|'no_show'; when: string; amount: Money }[];
   raw?: { title: string; text: string }[] }
 interface OfferDetails extends Offer { fareRules: FareRules; amenitiesBySegment: Record<string, Amenity[]>; warnings: string[] }
@@ -121,24 +142,31 @@ interface Itinerary { id: string; status: 'active'|'expired'|'booked'|'abandoned
 interface PassengerSlot { id: string; type: PaxType; index: number; travelerId?: string }
 interface Promo { code: string; label: string; discount: Money; conditions?: string }
 interface TravelerRequirements { perType: Record<PaxType, { fields: FieldRule[]; documents: DocumentRule[] }>;
-  contact: FieldRule[]; apis: boolean; gstAvailable: boolean; ageRules: AgeRules; nameRules: { maxLength: number; charset: 'latin'|'any' } }
+  contact: FieldRule[]; apis: boolean; gstAvailable: boolean; ageRules: AgeRules;
+  nameRules: { maxLength: number; charset: 'latin'|'any'; maxCombinedLength?: number };   // maxCombinedLength bounds name + passenger type + DOB together (GDS: 59)
+  threeDsRequired?: boolean;                                   // 3-D Secure authentication required at payment
+  perTraveler?: Record<string, { fields: FieldRule[]; documents: DocumentRule[] }> }   // keyed by slot id when rules differ per traveler
 interface FieldRule { path: string; required: boolean; pattern?: string; options?: string[] }
 interface DocumentRule { types: TravelDocument['type'][]; required: boolean; minValidityMonths?: number }
 interface AgeRules { infantMax: number; childMax: number; refDate: 'departure'|'return'; infantPerAdult: number; maxPax: number }   // infantMax / childMax are EXCLUSIVE upper bounds in years: age < infantMax → INF, infantMax <= age < childMax → CHD
 interface Traveler { id?: string; slotId?: string; type: PaxType; title?: string; firstName: string; middleName?: string; lastName: string;
-  gender: 'M'|'F'|'X'; dob: DateStr; nationality?: string; documents?: TravelDocument[]; loyalty?: LoyaltyAccount[];
+  secondLastName?: string; gender: 'M'|'F'|'X'; genderDetail?: 'unspecified'|'undisclosed'; dob: DateStr; nationality?: string;   // genderDetail: provider detail behind 'X'
+  documents?: TravelDocument[]; loyalty?: LoyaltyAccount[];
   knownTravelerNumber?: string; redressNumber?: string; mealPref?: string; seatPref?: string; assistance?: string[];
-  email?: string; phone?: Phone }
+  email?: string; phone?: Phone; associatedAdultId?: string;   // adult an infant travels with
+  discountEligibility?: { subType: string; travelerType?: PaxType; cityName?: string; cardNumber?: string; certificateNumber?: string }[] }   // resident / pass discounts
 interface TravelerProfile extends Traveler { id: string; isDefault?: boolean; relation?: string; updatedAt: DateTime }
-interface TravelDocument { id?: string; type: 'passport'|'national_id'|'driving_licence'|'other'; number: string;
-  issuingCountry: string; nationality?: string; expiry: DateStr; issueDate?: DateStr }
+interface TravelDocument { id?: string; type: 'passport'|'national_id'|'visa'|'driving_licence'|'other'; number: string;
+  issuingCountry: string; nationality?: string; expiry: DateStr; issueDate?: DateStr;
+  issuanceLocation?: string; birthPlace?: string; birthCountry?: string; validityCountry?: string; holder?: boolean }   // APIS extras; holder = traveler is the document holder
 interface LoyaltyAccount { airline: string; programme?: string; number: string }
-interface Phone { countryCode: string; number: string }
+interface Phone { countryCode: string; number: string; type?: 'mobile'|'landline'|'fax' }
 interface Contact { email: string; phone: Phone; emergency?: { name: string; phone: Phone };
-  address?: Address; gst?: { number: string; company: string; address?: string; email?: string } }
-interface Address { line1: string; line2?: string; city: string; state?: string; postalCode: string; countryCode: string }
+  address?: Address; gst?: { number: string; company: string; address?: string; email?: string };
+  language?: string; company?: string; purpose?: 'standard'|'invoice'|string }   // preferred language, company name, provider contact purpose
+interface Address { line1: string; line2?: string; city: string; state?: string; postalCode: string; countryCode: string; postalBox?: string }
 
-type AncillaryType = 'seat'|'baggage'|'meal'|'insurance'|'protection'|'priority_boarding'|'lounge'|'fast_track'|'wifi'|'carbon_offset'|'bundle'|string
+type AncillaryType = 'seat'|'baggage'|'meal'|'insurance'|'protection'|'priority_boarding'|'lounge'|'fast_track'|'wifi'|'carbon_offset'|'bundle'|'airport_checkin'|'cabin_baggage'|string
 interface Service { id: string; type: AncillaryType; code?: string; label: string; description?: string; price: Money;
   scope: 'per_passenger'|'per_passenger_segment'|'per_passenger_slice'|'per_booking'; maxQuantity?: number;
   eligiblePassengerTypes?: PaxType[]; segmentId?: string; sliceId?: string; meta?: object }
@@ -158,14 +186,19 @@ interface Protection { id: string; type: 'price_drop'|'cfar'|'flexible_ticket'|'
 // ── booking / payment ─────────────────────────────────────────────────────
 type BookingStatus = 'draft'|'pending_payment'|'on_hold'|'processing'|'confirmed'|'ticketed'|'partially_ticketed'|'failed'|'cancelled'|'refunded'|'expired'
 interface Booking { id: string; reference: string; type: 'flight'|'price_lock'; status: BookingStatus; pnr?: string;
-  airlineLocators: { airline: string; locator: string }[]; tickets: { passengerId: string; number: string; segmentIds: string[] }[];
+  airlineLocators: { airline: string; locator: string }[];
+  tickets: { passengerId: string; number: string; segmentIds: string[]; type?: 'eticket'|'emd'|'mco'|'pticket'; status?: 'issued'|'refunded'|'void'|'original'|'exchanged' }[];
   itinerary: Itinerary; travelers: Traveler[]; contact: Contact; payment: PaymentSummary; holdExpiresAt?: DateTime;
   voidUntil?: DateTime; createdAt: DateTime; documents: Document[]; availableActions: TripAction[]; failure?: BookingFailure;
-  protections: Protection[]; metadata?: object }
+  protections: Protection[]; metadata?: object;
+  records?: { reference: string; system: string; offerId?: string; createdAt?: DateTime }[];   // every provider record (multi-PNR bookings)
+  emds?: { passengerId: string; number: string; segmentIds: string[]; status?: 'issued'|'refunded'|'void'|'original'|'exchanged' }[];   // ancillary documents
+  warnings?: Issue[]; source?: string }   // provider warnings at creation; content source (GDS, NDC, …)
 interface BookingFailure { code: string; message: string; recoverable: boolean; suggestedAction: 'retry_payment'|'search_again'|'contact_support'|'wait' }
 interface PaymentSummary { total: Money; paid: Money; due: Money; dueBy?: DateTime; methods: { type: string; last4?: string; amount: Money }[] }
 interface Document { type: 'eticket'|'invoice'|'gst_invoice'|'receipt'|'insurance_policy'|'visa_letter'|string; label: string; url?: string; available: boolean }
-interface HoldOption { id: string; label: string; fee: Money; holdUntil: DateTime; refundableFee: boolean; onExpiry: 'drop'|'charge'|'convert_to_paid' }
+interface HoldOption { id: string; label: string; fee: Money; holdUntil: DateTime; refundableFee: boolean; onExpiry: 'drop'|'charge'|'convert_to_paid'|'queue';
+  ticketingAgreement?: { option: 'confirm'|'delay_to_queue'|'delay_to_cancel'; delayDays?: number } }   // provider-side agreement behind the option
 interface PriceLockOption { id: string; durationHours: number; fee: Money; capAmount?: Money; terms: string }
 
 type PaymentMethodType = 'card'|'upi'|'netbanking'|'wallet'|'apple_pay'|'google_pay'|'paypal'|'bnpl'|'emi'|'bank_transfer'|'pay_later'|'loyalty_points'|'gift_card'|'ota_wallet'|'voucher'
@@ -188,9 +221,11 @@ interface GatewayAdapter { name: string; load(opts: object): Promise<void>; moun
 interface GatewayElement { el: HTMLElement; isComplete(): boolean; on(evt: 'change'|'ready'|'error', fn: Function): () => void }
 // The isolated payments package implements this port; domain modules depend on nothing else from it.
 interface PaymentsPort { methods; quote; credits; emiPlans; createIntent; mount; tokenize; confirm; handleAction; waitForResult; pay; resumeAfterRedirect; cancel; retry; intent; status; quoteState; savedMethods; receipt; refunds; gateways; validateCard; cardBrand; clear }  // see 07-booking.md §2
+// Provider issue: the entries of Problem.errors[] and of the warnings[] a successful response may carry
+interface Issue { code?: string|number; title?: string; detail?: string; source?: { pointer?: string; parameter?: string; example?: string } }
 // RFC 9457 problem document as returned by the backend (extension members: code, errors, requestId)
 interface Problem { type: string; title: string; status: number; detail?: string; instance?: string; code?: string; requestId?: string;
-  errors?: { code?: string|number; title?: string; detail?: string; source?: { pointer?: string; parameter?: string; example?: string } }[]; [ext: string]: unknown }
+  errors?: Issue[]; [ext: string]: unknown }
 interface Refund { id: string; bookingId: string; amount: Money; method: string; status: 'requested'|'processing'|'completed'|'failed'; eta?: DateTime; updatedAt: DateTime }
 
 // ── trips / servicing ─────────────────────────────────────────────────────
@@ -199,11 +234,13 @@ interface Trip extends Booking { phase: Phase; nextSegment?: Segment; flightStat
 interface FlightStatus { segmentId: string; status: 'scheduled'|'on_time'|'delayed'|'departed'|'landed'|'cancelled'|'diverted';
   estimatedDeparture?: DateTime; estimatedArrival?: DateTime; gate?: string; terminal?: string; baggageBelt?: string; delayMinutes?: number }
 interface CheckInInfo { perSegment: { segmentId: string; opensAt: DateTime; closesAt: DateTime; url?: string; status: 'not_open'|'open'|'closed'|'done' }[] }
-interface ChangeOptions { changeable: boolean; slices: { sliceId: string; changeable: boolean; penalty?: Money; deadline?: DateTime }[];
+interface ChangeOptions { changeable: boolean;
+  slices: { sliceId: string; changeable: boolean; penalty?: Money; deadline?: DateTime; rebookConditions?: { reshopValidatingAirlineCodes?: string[]; waiverCode?: string } }[];
   passengers: { passengerId: string; changeable: boolean }[]; notes: string[] }
 interface ChangeQuote { id: string; bookingId: string; newOffer: Offer; fareDifference: Money; penalty: Money; total: Money; refundDue?: Money; expiresAt: DateTime }
 interface CancelQuote { id: string; bookingId: string; scope: { passengerIds?: string[]; sliceIds?: string[] }; refund: Money; penalty: Money;
-  nonRefundable: Money; protectionCover?: Money; refundMethods: ('original'|'wallet'|'voucher')[]; eta?: string; voidEligible: boolean; expiresAt: DateTime }
+  nonRefundable: Money; protectionCover?: Money; refundMethods: ('original'|'wallet'|'voucher')[]; eta?: string; voidEligible: boolean; expiresAt: DateTime;
+  breakdown?: { farePaid: Money; fareUsed: Money; fareRefund: Money; totalTax: Money } }   // ticket-level refund arithmetic: farePaid − fareUsed = fareRefund
 interface Cancellation { id: string; bookingId: string; status: 'processing'|'cancelled'|'failed'; refund?: Refund }
 interface Disruption { id: string; type: 'schedule_change'|'cancellation'|'reaccommodation'; segmentIds: string[]; summary: string;
   options: { id: string; type: 'accept'|'alternative'|'refund'|'voucher'; offer?: Offer; refund?: Money }[]; respondBy?: DateTime; status: 'open'|'responded' }

@@ -204,6 +204,10 @@
  * @property {'per_slice'|'combined'} [resultMode] default `per_slice` (split: outbound and inbound
  *   chosen separately, docs/QUESTIONS.md decision 5)
  * @property {{ bookingId?: string, sliceIds?: string[] }} [context] reshop for a change
+ * @property {number} [nearbyRadiusKm] provider passthrough: nearby-airport radius in km
+ * @property {string[]} [corporateCodes] provider passthrough: negotiated-fare codes
+ * @property {string[]} [sources] provider passthrough: content sources
+ * @property {{ include?: IATA[], exclude?: IATA[] }} [via] connection points to prefer / avoid
  */
 
 /**
@@ -218,7 +222,7 @@
  * @property {Facets} facets facet counts of the loaded set
  * @property {ResultsSummary} summary cheapest / fastest / best / earliest
  * @property {PriceInsight} [insights] price insight when available
- * @property {{ total: number, currency: string, expiresAt: DateTime, providersPending: number, cursor?: string }} meta result metadata
+ * @property {{ total: number, currency: string, expiresAt: DateTime, providersPending: number, cursor?: string, sessionMode?: 'native_split'|'fanout'|'combined', warnings?: Issue[] }} meta result metadata; `sessionMode` says how per_slice results were produced, `warnings` are provider warnings
  */
 
 /**
@@ -243,6 +247,18 @@
  * @property {DateStr} [lastTicketingDate] ticketing deadline
  * @property {string[]} [validatingAirlines] validating airline codes
  * @property {boolean} [oneWayCombinable] can be combined with other one-way offers
+ * @property {{ date: DateStr, dateTime?: DateTime }} [ticketingDeadline] lastTicketingDate / lastTicketingDateTime as returned
+ * @property {number} [bookableSeats] seats bookable in one request (1..9, 9 = "9 or more"); `seatsLeft` stays the backend scarcity signal
+ * @property {boolean} [instantTicketingRequired] ticketing is required at booking
+ * @property {boolean} [paymentCardRequired] a payment card is mandatory to book
+ * @property {boolean} [multiplePnrs] booking yields several records (nonHomogeneous)
+ * @property {boolean} [isUpsell] branded-fare upsell of another offer
+ * @property {string[]} [upsellOfferIds] ids of the upsell offers of this one
+ * @property {string} [sourceReference] provider-side reference of the offer
+ * @property {{ fareType?: ('published'|'negotiated'|'corporate')[], corporateCodes?: string[], includedCheckedBagsOnly?: boolean, refundableFare?: boolean, noRestrictionFare?: boolean, noPenaltyFare?: boolean }} [pricingOptions] fare filters the offer was priced with
+ * @property {Money} [billing] grand total in the billing currency when it differs from the display currency
+ * @property {string[]} [fareOptions] fare option codes, e.g. STANDARD, INCLUSIVE_TOUR, SPANISH_CANARY_RESIDENT
+ * @property {Issue[]} [warnings] non-blocking provider warnings attached to the offer
  * @property {unknown} [raw] untouched wire payload (e.g. Amadeus FlightOffer)
  */
 
@@ -296,6 +312,16 @@
  * @property {Amenity[]} [amenities] onboard amenities
  * @property {number} [distanceKm] flown distance
  * @property {number} [onTimePct] on-time performance
+ * @property {boolean} [localTimeOnly] departureAt / arrivalAt carry no UTC offset (airport time zone unknown)
+ * @property {{ airport: Place, arrivalAt: DateTime, departureAt: DateTime, durationMinutes: number }[]} [technicalStops] stops without a change of flight
+ * @property {boolean} [blacklistedInEU] a carrier of the flight is on the EU air-safety list
+ * @property {number} [emissionsKg] CO2 estimate for this segment
+ * @property {'confirmed'|'waitlisted'|'cancelled'|'pending'|'denied'} [status] post-booking segment status
+ * @property {boolean} [flown] post-booking: segment already flown
+ * @property {'active'|'passive'|'ghost'|'staff'} [segmentType] post-booking segment kind
+ * @property {Partial<Record<PaxType, CabinClass>>} [cabinByPaxType] cabin per passenger type when it differs
+ * @property {string} [brandedFare] brand code for this segment when it differs per segment
+ * @property {{ quantity?: number, weightKg?: number }} [includedCheckedBags] allowance passthrough for this segment
  */
 
 /**
@@ -311,9 +337,11 @@
 /**
  * Onboard amenity.
  * @typedef {Object} Amenity
- * @property {'wifi'|'power'|'meal'|'entertainment'|'seat_pitch'|'legroom'|string} type amenity kind
+ * @property {'wifi'|'power'|'meal'|'entertainment'|'seat_pitch'|'legroom'|'baggage'|'lounge'|'miles'|'fare_feature'|string} type amenity kind
  * @property {string} [value] detail, e.g. seat pitch
  * @property {boolean} [paid] paid amenity
+ * @property {string} [code] provider amenity code
+ * @property {string} [label] display label of the amenity
  */
 
 /**
@@ -330,6 +358,8 @@
  * @property {PaxType} type passenger type
  * @property {number} count passengers of that type
  * @property {PriceBreakdown} unit price per passenger
+ * @property {string} [fareOption] fare option code of the group, e.g. STANDARD
+ * @property {string[]} [travelerIds] provider traveler ids of the group
  */
 
 /**
@@ -343,6 +373,9 @@
  * @property {Money} [ancillaries] ancillaries total
  * @property {Money} perPax total per passenger
  * @property {{ code: string, label: string, amount: Money }[]} [items] itemised lines
+ * @property {Money} [billing] grand total in the billing currency when it differs from the display currency
+ * @property {Money} [refundableTaxes] refundable part of the taxes
+ * @property {{ type: 'agent_markup'|'agent_fee'|string, amount: Money }[]} [margins] agency margins
  */
 
 /**
@@ -382,7 +415,10 @@
  * @property {number} tier ordering tier
  * @property {string} [offerId] offer id of this brand
  * @property {Money} priceDelta difference to the base offer
- * @property {{ code: string, label: string, included: boolean|'fee', detail?: string }[]} features included / paid features
+ * @property {{ code: string, label: string, included: boolean|'fee', detail?: string, type?: string }[]} features included / paid features (`type` = provider amenity type)
+ * @property {boolean} [isCurrent] this is the brand of the base offer
+ * @property {number} [sliceIndex] slice the upsell applies to (per-slice upsells)
+ * @property {Record<string, string>} [brandedFareBySegment] brand code per segment id
  */
 
 /**
@@ -551,7 +587,9 @@
  * @property {boolean} apis advance passenger information required
  * @property {boolean} gstAvailable GST invoice details may be captured
  * @property {AgeRules} ageRules age bands
- * @property {{ maxLength: number, charset: 'latin'|'any' }} nameRules name constraints
+ * @property {{ maxLength: number, charset: 'latin'|'any', maxCombinedLength?: number }} nameRules name constraints; `maxCombinedLength` bounds name + passenger type + DOB together (GDS: 59)
+ * @property {boolean} [threeDsRequired] 3-D Secure authentication required at payment
+ * @property {Record<string, { fields: FieldRule[], documents: DocumentRule[] }>} [perTraveler] keyed by slot id when rules differ per traveler
  */
 
 /**
@@ -591,7 +629,9 @@
  * @property {string} firstName first name
  * @property {string} [middleName] middle name
  * @property {string} lastName last name
+ * @property {string} [secondLastName] second last name
  * @property {'M'|'F'|'X'} gender gender
+ * @property {'unspecified'|'undisclosed'} [genderDetail] provider detail behind `gender: 'X'`
  * @property {DateStr} dob date of birth
  * @property {string} [nationality] ISO-3166 alpha-2
  * @property {TravelDocument[]} [documents] travel documents
@@ -603,6 +643,8 @@
  * @property {string[]} [assistance] special assistance codes
  * @property {string} [email] email
  * @property {Phone} [phone] phone
+ * @property {string} [associatedAdultId] adult an infant travels with
+ * @property {{ subType: string, travelerType?: PaxType, cityName?: string, cardNumber?: string, certificateNumber?: string }[]} [discountEligibility] resident / pass discounts the traveler qualifies for
  */
 
 /**
@@ -614,12 +656,17 @@
  * Travel document.
  * @typedef {Object} TravelDocument
  * @property {string} [id] document id
- * @property {'passport'|'national_id'|'driving_licence'|'other'} type document type
+ * @property {'passport'|'national_id'|'visa'|'driving_licence'|'other'} type document type
  * @property {string} number document number
  * @property {string} issuingCountry ISO-3166 alpha-2
  * @property {string} [nationality] ISO-3166 alpha-2
  * @property {DateStr} expiry expiry date
  * @property {DateStr} [issueDate] issue date
+ * @property {string} [issuanceLocation] place of issue (city, state or country)
+ * @property {string} [birthPlace] birth place as printed on the document
+ * @property {string} [birthCountry] ISO-3166 alpha-2 country of birth
+ * @property {string} [validityCountry] ISO-3166 alpha-2 country the document is valid for (visas)
+ * @property {boolean} [holder] the traveler is the holder of the document
  */
 
 /**
@@ -635,6 +682,7 @@
  * @typedef {Object} Phone
  * @property {string} countryCode dial code
  * @property {string} number national number
+ * @property {'mobile'|'landline'|'fax'} [type] device type
  */
 
 /**
@@ -645,6 +693,9 @@
  * @property {{ name: string, phone: Phone }} [emergency] emergency contact
  * @property {Address} [address] postal address
  * @property {{ number: string, company: string, address?: string, email?: string }} [gst] GST invoice details
+ * @property {string} [language] preferred contact language
+ * @property {string} [company] company name
+ * @property {'standard'|'invoice'|string} [purpose] provider contact purpose
  */
 
 /**
@@ -656,11 +707,12 @@
  * @property {string} [state] state / region
  * @property {string} postalCode postal code
  * @property {string} countryCode ISO-3166 alpha-2
+ * @property {string} [postalBox] post-office box
  */
 
 /**
  * Ancillary kind (open set).
- * @typedef {'seat'|'baggage'|'meal'|'insurance'|'protection'|'priority_boarding'|'lounge'|'fast_track'|'wifi'|'carbon_offset'|'bundle'|string} AncillaryType
+ * @typedef {'seat'|'baggage'|'meal'|'insurance'|'protection'|'priority_boarding'|'lounge'|'fast_track'|'wifi'|'carbon_offset'|'bundle'|'airport_checkin'|'cabin_baggage'|string} AncillaryType
  */
 
 /**
@@ -774,7 +826,7 @@
  * @property {BookingStatus} status lifecycle state
  * @property {string} [pnr] PNR
  * @property {{ airline: string, locator: string }[]} airlineLocators airline record locators
- * @property {{ passengerId: string, number: string, segmentIds: string[] }[]} tickets issued tickets
+ * @property {{ passengerId: string, number: string, segmentIds: string[], type?: 'eticket'|'emd'|'mco'|'pticket', status?: 'issued'|'refunded'|'void'|'original'|'exchanged' }[]} tickets issued tickets
  * @property {Itinerary} itinerary booked itinerary
  * @property {Traveler[]} travelers travelers
  * @property {Contact} contact contact
@@ -787,6 +839,10 @@
  * @property {BookingFailure} [failure] failure details
  * @property {Protection[]} protections protections purchased
  * @property {object} [metadata] host metadata
+ * @property {{ reference: string, system: string, offerId?: string, createdAt?: DateTime }[]} [records] every provider record (multi-PNR bookings)
+ * @property {{ passengerId: string, number: string, segmentIds: string[], status?: 'issued'|'refunded'|'void'|'original'|'exchanged' }[]} [emds] ancillary documents (EMDs)
+ * @property {Issue[]} [warnings] provider warnings raised at creation
+ * @property {string} [source] content source (GDS, NDC, …)
  */
 
 /**
@@ -825,7 +881,8 @@
  * @property {Money} fee hold fee
  * @property {DateTime} holdUntil hold deadline
  * @property {boolean} refundableFee fee refunded on purchase
- * @property {'drop'|'charge'|'convert_to_paid'} onExpiry what happens when the hold expires
+ * @property {'drop'|'charge'|'convert_to_paid'|'queue'} onExpiry what happens when the hold expires (`queue` = handed to an agent queue)
+ * @property {{ option: 'confirm'|'delay_to_queue'|'delay_to_cancel', delayDays?: number }} [ticketingAgreement] provider-side agreement behind the option
  */
 
 /**
@@ -1038,8 +1095,18 @@
  */
 
 /**
+ * Provider issue: the entries of `Problem.errors[]` and of the `warnings[]` a successful response may
+ * carry (Amadeus-style; `source.pointer` / `source.parameter` locate the offending input).
+ * @typedef {Object} Issue
+ * @property {string|number} [code] provider / canonical code
+ * @property {string} [title] short summary
+ * @property {string} [detail] explanation
+ * @property {{ pointer?: string, parameter?: string, example?: string }} [source] where in the request the issue is
+ */
+
+/**
  * RFC 9457 problem document as returned by the backend (extension members: `code`, `errors`,
- * `requestId`; Amadeus-style `errors[]` issues carry `source.pointer` / `source.parameter`).
+ * `requestId`).
  * @typedef {{
  *   type: string,
  *   title: string,
@@ -1048,7 +1115,7 @@
  *   instance?: string,
  *   code?: string,
  *   requestId?: string,
- *   errors?: { code?: string|number, title?: string, detail?: string, source?: { pointer?: string, parameter?: string, example?: string } }[],
+ *   errors?: Issue[],
  *   [ext: string]: unknown
  * }} Problem
  */
@@ -1100,7 +1167,7 @@
  * What can be changed on a booking.
  * @typedef {Object} ChangeOptions
  * @property {boolean} changeable any change allowed
- * @property {{ sliceId: string, changeable: boolean, penalty?: Money, deadline?: DateTime }[]} slices per slice
+ * @property {{ sliceId: string, changeable: boolean, penalty?: Money, deadline?: DateTime, rebookConditions?: { reshopValidatingAirlineCodes?: string[], waiverCode?: string } }[]} slices per slice (`rebookConditions`: airlines a reshop may validate on, waiver code)
  * @property {{ passengerId: string, changeable: boolean }[]} passengers per passenger
  * @property {string[]} notes notes
  */
@@ -1132,6 +1199,7 @@
  * @property {string} [eta] refund ETA text
  * @property {boolean} voidEligible free void possible
  * @property {DateTime} expiresAt quote expiry
+ * @property {{ farePaid: Money, fareUsed: Money, fareRefund: Money, totalTax: Money }} [breakdown] ticket-level refund arithmetic: farePaid − fareUsed = fareRefund
  */
 
 /**

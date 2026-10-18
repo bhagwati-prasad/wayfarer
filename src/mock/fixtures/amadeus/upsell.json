@@ -1,0 +1,1752 @@
+{
+  "meta": {
+    "count": 3,
+    "oneWayUpselledCombinations": [
+      { "flightOfferId": "1", "upselledFlightOfferIds": ["1", "2", "3"] }
+    ]
+  },
+  "data": [
+    {
+      "type": "flight-offer",
+      "id": "1",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "isUpsellOffer": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+              "carrierCode": "AI",
+              "number": "865",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H15M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "32017.54",
+        "base": "27915.75",
+        "fees": [{ "amount": "0.00", "type": "TICKETING" }],
+        "grandTotal": "32017.54"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "11186.75",
+            "base": "9795.00",
+            "taxes": [
+              { "amount": "489.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "11186.75",
+            "base": "9795.00",
+            "taxes": [
+              { "amount": "489.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": {
+            "currency": "INR",
+            "total": "8615.56",
+            "base": "7346.25",
+            "taxes": [
+              { "amount": "367.31", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": {
+            "currency": "INR",
+            "total": "1028.48",
+            "base": "979.50",
+            "taxes": [{ "amount": "48.98", "code": "K3" }]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "2",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "isUpsellOffer": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+              "carrierCode": "AI",
+              "number": "865",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H15M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "39199.54",
+        "base": "34755.75",
+        "fees": [{ "amount": "0.00", "type": "TICKETING" }],
+        "grandTotal": "39199.54"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "13706.75",
+            "base": "12195.00",
+            "taxes": [
+              { "amount": "609.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "13706.75",
+            "base": "12195.00",
+            "taxes": [
+              { "amount": "609.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": {
+            "currency": "INR",
+            "total": "10505.56",
+            "base": "9146.25",
+            "taxes": [
+              { "amount": "457.31", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": {
+            "currency": "INR",
+            "total": "1280.48",
+            "base": "1219.50",
+            "taxes": [{ "amount": "60.98", "code": "K3" }]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSCL",
+              "brandedFare": "ECOCLASSIC",
+              "brandedFareLabel": "ECO CLASSIC",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "CANCELLATION FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 100 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "3",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "isUpsellOffer": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+              "carrierCode": "AI",
+              "number": "865",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H15M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "48775.54",
+        "base": "43875.75",
+        "fees": [{ "amount": "0.00", "type": "TICKETING" }],
+        "grandTotal": "48775.54"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "17066.75",
+            "base": "15395.00",
+            "taxes": [
+              { "amount": "769.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "17066.75",
+            "base": "15395.00",
+            "taxes": [
+              { "amount": "769.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": {
+            "currency": "INR",
+            "total": "13025.56",
+            "base": "11546.25",
+            "taxes": [
+              { "amount": "577.31", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": {
+            "currency": "INR",
+            "total": "1616.48",
+            "base": "1539.50",
+            "taxes": [{ "amount": "76.98", "code": "K3" }]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSFL",
+              "brandedFare": "ECOFLEX",
+              "brandedFareLabel": "ECO FLEX",
+              "class": "U",
+              "includedCheckedBags": { "weight": 25, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 25KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "051",
+                  "description": "PREFERRED SEAT SELECTION",
+                  "isChargeable": false,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "FREE DATE CHANGE",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Y",
+                  "description": "FREE CANCELLATION",
+                  "isChargeable": false,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 125 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "058",
+                  "description": "UPGRADE ELIGIBILITY",
+                  "isChargeable": true,
+                  "amenityType": "UPGRADES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "dictionaries": {
+    "locations": {
+      "BOM": { "cityCode": "BOM", "countryCode": "IN" },
+      "DEL": { "cityCode": "DEL", "countryCode": "IN" }
+    },
+    "aircraft": { "321": "AIRBUS A321" },
+    "currencies": { "INR": "INDIAN RUPEE" },
+    "carriers": { "AI": "AIR INDIA" }
+  }
+}

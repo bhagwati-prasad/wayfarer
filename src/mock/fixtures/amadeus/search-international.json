@@ -1,0 +1,1687 @@
+{
+  "meta": {
+    "count": 10,
+    "oneWayCombinations": [
+      { "originDestinationId": "1", "flightOfferIds": ["7", "8"] },
+      { "originDestinationId": "2", "flightOfferIds": ["9", "10"] }
+    ]
+  },
+  "data": [
+    {
+      "type": "flight-offer",
+      "id": "1",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-25",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT12H40M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T04:15:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T06:30:00" },
+              "carrierCode": "EK",
+              "number": "511",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H45M",
+              "id": "1",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 168, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T07:45:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-10T11:25:00" },
+              "carrierCode": "EK",
+              "number": "1",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT7H40M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 301, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT12H35M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-20T14:30:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T01:20:00" },
+              "carrierCode": "EK",
+              "number": "4",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT6H50M",
+              "id": "3",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 301, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T03:40:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T08:35:00" },
+              "carrierCode": "EK",
+              "number": "510",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H25M",
+              "id": "4",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 168, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "98837.00",
+        "base": "55300.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "98837.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["EK"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "98837.00",
+            "base": "55300.00",
+            "taxes": [
+              { "amount": "2765.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "810.00", "code": "F6" },
+              { "amount": "370.00", "code": "ZR" },
+              { "amount": "1600.00", "code": "AE" },
+              { "amount": "22400.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "2",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-24",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT13H55M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T03:55:00" },
+              "arrival": { "iataCode": "DOH", "at": "2026-12-10T05:55:00" },
+              "carrierCode": "QR",
+              "number": "579",
+              "aircraft": { "code": "359" },
+              "operating": { "carrierCode": "QR" },
+              "duration": "PT4H30M",
+              "id": "5",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 172, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DOH", "at": "2026-12-10T08:00:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "4", "at": "2026-12-10T12:20:00" },
+              "carrierCode": "QR",
+              "number": "7",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "QR" },
+              "duration": "PT7H20M",
+              "id": "6",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 298, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT12H20M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "4", "at": "2026-12-20T15:00:00" },
+              "arrival": { "iataCode": "DOH", "at": "2026-12-21T00:45:00" },
+              "carrierCode": "QR",
+              "number": "8",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "QR" },
+              "duration": "PT6H45M",
+              "id": "7",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 298, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DOH", "at": "2026-12-21T02:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T08:50:00" },
+              "carrierCode": "QR",
+              "number": "578",
+              "aircraft": { "code": "359" },
+              "operating": { "carrierCode": "QR" },
+              "duration": "PT4H20M",
+              "id": "8",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 172, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "93577.00",
+        "base": "52900.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "93577.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["QR"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "93577.00",
+            "base": "52900.00",
+            "taxes": [
+              { "amount": "2645.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "2100.00", "code": "QA" },
+              { "amount": "740.00", "code": "PZ" },
+              { "amount": "19600.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "5",
+              "cabin": "ECONOMY",
+              "fareBasis": "NLR2R1RD",
+              "class": "N",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "6",
+              "cabin": "ECONOMY",
+              "fareBasis": "NLR2R1RD",
+              "class": "N",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "7",
+              "cabin": "ECONOMY",
+              "fareBasis": "NLR2R1RD",
+              "class": "N",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "8",
+              "cabin": "ECONOMY",
+              "fareBasis": "NLR2R1RD",
+              "class": "N",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "3",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-22",
+      "numberOfBookableSeats": 6,
+      "itineraries": [
+        {
+          "duration": "PT9H30M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T06:25:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "2", "at": "2026-12-10T10:25:00" },
+              "carrierCode": "AI",
+              "number": "111",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT9H30M",
+              "id": "9",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 389, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT8H55M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "2", "at": "2026-12-20T13:40:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T04:05:00" },
+              "carrierCode": "AI",
+              "number": "112",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT8H55M",
+              "id": "10",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 389, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "100212.00",
+        "base": "60400.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "100212.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "100212.00",
+            "base": "60400.00",
+            "taxes": [
+              { "amount": "3020.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "21200.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "SL1YXSAI",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 31, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "SL1YXSAI",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 31, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "4",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 5,
+      "itineraries": [
+        {
+          "duration": "PT10H05M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T03:35:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "5", "at": "2026-12-10T08:10:00" },
+              "carrierCode": "BA",
+              "number": "142",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "BA" },
+              "duration": "PT10H05M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 412, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT8H40M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "5", "at": "2026-12-20T12:50:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T03:00:00" },
+              "carrierCode": "BA",
+              "number": "143",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "BA" },
+              "duration": "PT8H40M",
+              "id": "12",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 412, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "92107.00",
+        "base": "48300.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "92107.00",
+        "additionalServices": [{ "amount": "6900.00", "type": "CHECKED_BAGS" }]
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": false },
+      "validatingAirlineCodes": ["BA"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "92107.00",
+            "base": "48300.00",
+            "taxes": [
+              { "amount": "2415.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "25800.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "OKZ0ECB",
+              "brandedFare": "BASIC",
+              "brandedFareLabel": "BASIC",
+              "class": "O",
+              "includedCheckedBags": { "quantity": 0 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": { "chargeableCheckedBags": { "id": "1", "quantity": 1 } },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "CHECKED BAG 23KG",
+                  "isChargeable": true,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                }
+              ]
+            },
+            {
+              "segmentId": "12",
+              "cabin": "ECONOMY",
+              "fareBasis": "OKZ0ECB",
+              "brandedFare": "BASIC",
+              "brandedFareLabel": "BASIC",
+              "class": "O",
+              "includedCheckedBags": { "quantity": 0 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": { "chargeableCheckedBags": { "id": "1", "quantity": 1 } },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "CHECKED BAG 23KG",
+                  "isChargeable": true,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "5",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-23",
+      "numberOfBookableSeats": 2,
+      "itineraries": [
+        {
+          "duration": "PT13H35M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T05:40:00" },
+              "arrival": { "iataCode": "AUH", "terminal": "A", "at": "2026-12-10T08:05:00" },
+              "carrierCode": "EY",
+              "number": "211",
+              "aircraft": { "code": "789" },
+              "operating": { "carrierCode": "EY" },
+              "duration": "PT3H55M",
+              "id": "13",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 160, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "AUH", "terminal": "A", "at": "2026-12-10T09:55:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "4", "at": "2026-12-10T13:45:00" },
+              "carrierCode": "EY",
+              "number": "11",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EY" },
+              "duration": "PT7H50M",
+              "id": "14",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 305, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT13H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "4", "at": "2026-12-20T20:25:00" },
+              "arrival": { "iataCode": "AUH", "terminal": "A", "at": "2026-12-21T07:25:00" },
+              "carrierCode": "EY",
+              "number": "18",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EY" },
+              "duration": "PT7H",
+              "id": "15",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 305, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "AUH", "terminal": "A", "at": "2026-12-21T09:50:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T15:05:00" },
+              "carrierCode": "EY",
+              "number": "216",
+              "aircraft": { "code": "789" },
+              "operating": { "carrierCode": "EY" },
+              "duration": "PT3H45M",
+              "id": "16",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 160, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "93197.00",
+        "base": "50500.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "93197.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["EY"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "93197.00",
+            "base": "50500.00",
+            "taxes": [
+              { "amount": "2525.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "810.00", "code": "F6" },
+              { "amount": "370.00", "code": "ZR" },
+              { "amount": "1600.00", "code": "AE" },
+              { "amount": "21800.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "VLWDIN1",
+              "class": "V",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "14",
+              "cabin": "ECONOMY",
+              "fareBasis": "VLWDIN1",
+              "class": "V",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "15",
+              "cabin": "ECONOMY",
+              "fareBasis": "VLWDIN1",
+              "class": "V",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "16",
+              "cabin": "ECONOMY",
+              "fareBasis": "VLWDIN1",
+              "class": "V",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "6",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-25",
+      "numberOfBookableSeats": 3,
+      "itineraries": [
+        {
+          "duration": "PT12H40M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T04:15:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T06:30:00" },
+              "carrierCode": "EK",
+              "number": "511",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H45M",
+              "id": "1",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 336, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T07:45:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-10T11:25:00" },
+              "carrierCode": "EK",
+              "number": "1",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT7H40M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 602, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT12H35M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-20T14:30:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T01:20:00" },
+              "carrierCode": "EK",
+              "number": "4",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT6H50M",
+              "id": "3",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 602, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T03:40:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T08:35:00" },
+              "carrierCode": "EK",
+              "number": "510",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H25M",
+              "id": "4",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 336, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "298932.00",
+        "base": "230500.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "298932.00"
+      },
+      "pricingOptions": {
+        "fareType": ["PUBLISHED"],
+        "includedCheckedBagsOnly": true,
+        "refundableFare": true
+      },
+      "validatingAirlineCodes": ["EK"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "298932.00",
+            "base": "230500.00",
+            "taxes": [
+              { "amount": "27660.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "810.00", "code": "F6" },
+              { "amount": "370.00", "code": "ZR" },
+              { "amount": "1600.00", "code": "AE" },
+              { "amount": "22400.00", "code": "YQ" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "BUSINESS",
+              "fareBasis": "ILSOPIN1",
+              "class": "I",
+              "includedCheckedBags": { "weight": 40, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 14, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MULTI COURSE DINING",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": false, "amenityType": "WIFI" },
+                {
+                  "description": "LIE FLAT SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 78, "spaceUnit": "INCHES", "tilt": "FULL_FLAT" }
+                },
+                { "description": "LOUNGE ACCESS", "isChargeable": false, "amenityType": "LOUNGE" }
+              ]
+            },
+            {
+              "segmentId": "2",
+              "cabin": "BUSINESS",
+              "fareBasis": "ILSOPIN1",
+              "class": "I",
+              "includedCheckedBags": { "weight": 40, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 14, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MULTI COURSE DINING",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": false, "amenityType": "WIFI" },
+                {
+                  "description": "LIE FLAT SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 78, "spaceUnit": "INCHES", "tilt": "FULL_FLAT" }
+                },
+                { "description": "LOUNGE ACCESS", "isChargeable": false, "amenityType": "LOUNGE" }
+              ]
+            },
+            {
+              "segmentId": "3",
+              "cabin": "BUSINESS",
+              "fareBasis": "ILSOPIN1",
+              "class": "I",
+              "includedCheckedBags": { "weight": 40, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 14, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MULTI COURSE DINING",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": false, "amenityType": "WIFI" },
+                {
+                  "description": "LIE FLAT SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 78, "spaceUnit": "INCHES", "tilt": "FULL_FLAT" }
+                },
+                { "description": "LOUNGE ACCESS", "isChargeable": false, "amenityType": "LOUNGE" }
+              ]
+            },
+            {
+              "segmentId": "4",
+              "cabin": "BUSINESS",
+              "fareBasis": "ILSOPIN1",
+              "class": "I",
+              "includedCheckedBags": { "weight": 40, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 14, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MULTI COURSE DINING",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": false, "amenityType": "WIFI" },
+                {
+                  "description": "LIE FLAT SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 78, "spaceUnit": "INCHES", "tilt": "FULL_FLAT" }
+                },
+                { "description": "LOUNGE ACCESS", "isChargeable": false, "amenityType": "LOUNGE" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "7",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-25",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT12H40M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T04:15:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T06:30:00" },
+              "carrierCode": "EK",
+              "number": "511",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H45M",
+              "id": "1",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 168, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-10T07:45:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-10T11:25:00" },
+              "carrierCode": "EK",
+              "number": "1",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT7H40M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 301, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "43892.00",
+        "base": "28400.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "43892.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["EK"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "43892.00",
+            "base": "28400.00",
+            "taxes": [
+              { "amount": "1420.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "405.00", "code": "F6" },
+              { "amount": "185.00", "code": "ZR" },
+              { "amount": "800.00", "code": "AE" },
+              { "amount": "11200.00", "code": "YQ" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "8",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-22",
+      "numberOfBookableSeats": 6,
+      "itineraries": [
+        {
+          "duration": "PT9H30M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-10T06:25:00" },
+              "arrival": { "iataCode": "LHR", "terminal": "2", "at": "2026-12-10T10:25:00" },
+              "carrierCode": "AI",
+              "number": "111",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT9H30M",
+              "id": "9",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 389, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "44527.00",
+        "base": "30900.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "44527.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "44527.00",
+            "base": "30900.00",
+            "taxes": [
+              { "amount": "1545.00", "code": "K3" },
+              { "amount": "1155.00", "code": "IN" },
+              { "amount": "91.00", "code": "P2" },
+              { "amount": "236.00", "code": "WO" },
+              { "amount": "10600.00", "code": "YQ" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "SL1YXSAI",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 31, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "9",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-25",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT12H35M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "3", "at": "2026-12-20T14:30:00" },
+              "arrival": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T01:20:00" },
+              "carrierCode": "EK",
+              "number": "4",
+              "aircraft": { "code": "388" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT6H50M",
+              "id": "3",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 301, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "DXB", "terminal": "3", "at": "2026-12-21T03:40:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T08:35:00" },
+              "carrierCode": "EK",
+              "number": "510",
+              "aircraft": { "code": "77W" },
+              "operating": { "carrierCode": "EK" },
+              "duration": "PT3H25M",
+              "id": "4",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 168, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "54945.00",
+        "base": "26900.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "54945.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["EK"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "54945.00",
+            "base": "26900.00",
+            "taxes": [
+              { "amount": "1345.00", "code": "K3" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" },
+              { "amount": "405.00", "code": "F6" },
+              { "amount": "185.00", "code": "ZR" },
+              { "amount": "800.00", "code": "AE" },
+              { "amount": "11200.00", "code": "YQ" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "ULSOPIN1",
+              "class": "U",
+              "includedCheckedBags": { "weight": 30, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "WI FI", "isChargeable": true, "amenityType": "WIFI" },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 32, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "10",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-22",
+      "numberOfBookableSeats": 6,
+      "itineraries": [
+        {
+          "duration": "PT8H55M",
+          "segments": [
+            {
+              "departure": { "iataCode": "LHR", "terminal": "2", "at": "2026-12-20T13:40:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-12-21T04:05:00" },
+              "carrierCode": "AI",
+              "number": "112",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT8H55M",
+              "id": "10",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 389, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "55685.00",
+        "base": "29500.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "55685.00"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "55685.00",
+            "base": "29500.00",
+            "taxes": [
+              { "amount": "1475.00", "code": "K3" },
+              { "amount": "9260.00", "code": "GB" },
+              { "amount": "4850.00", "code": "UB" },
+              { "amount": "10600.00", "code": "YQ" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "SL1YXSAI",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "quantity": 2 },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "description": "MEAL AND BEVERAGES",
+                  "isChargeable": false,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "SEATBACK ENTERTAINMENT",
+                  "isChargeable": false,
+                  "amenityType": "ENTERTAINMENT"
+                },
+                { "description": "USB POWER", "isChargeable": false, "amenityType": "POWER" },
+                {
+                  "description": "STANDARD SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 31, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "dictionaries": {
+    "locations": {
+      "AUH": { "cityCode": "AUH", "countryCode": "AE" },
+      "DEL": { "cityCode": "DEL", "countryCode": "IN" },
+      "DOH": { "cityCode": "DOH", "countryCode": "QA" },
+      "DXB": { "cityCode": "DXB", "countryCode": "AE" },
+      "LHR": { "cityCode": "LON", "countryCode": "GB" }
+    },
+    "aircraft": {
+      "359": "AIRBUS A350-900",
+      "388": "AIRBUS A380-800",
+      "788": "BOEING 787-8",
+      "789": "BOEING 787-9",
+      "77W": "BOEING 777-300ER"
+    },
+    "currencies": { "INR": "INDIAN RUPEE" },
+    "carriers": {
+      "AI": "AIR INDIA",
+      "BA": "BRITISH AIRWAYS",
+      "EK": "EMIRATES",
+      "EY": "ETIHAD AIRWAYS",
+      "QR": "QATAR AIRWAYS"
+    }
+  }
+}

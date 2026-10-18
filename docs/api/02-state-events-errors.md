@@ -91,7 +91,7 @@ SdkError            { code, message, cause?, requestId?, retryable: boolean, det
 │  ├─ ConflictError
 │  ├─ SearchExpiredError   { sessionId }
 │  ├─ OfferExpiredError    { offerId }
-│  ├─ OfferUnavailableError{ offerId, reason: 'sold_out'|'withdrawn'|'schedule_changed' }
+│  ├─ OfferUnavailableError{ offerId, reason: 'sold_out'|'withdrawn'|'schedule_changed'|'waitlist'|'on_request' }   // waitlist / on_request ← availability closedStatus
 │  ├─ PriceChangedError    { from: Money, to: Money, newOfferId?, itineraryId? }
 │  ├─ ItineraryExpiredError{ itineraryId }
 │  ├─ BookingError         { stage: 'create'|'hold'|'confirm'|'ticketing', recoverable, suggestedAction: 'retry_payment'|'search_again'|'contact_support'|'wait' }

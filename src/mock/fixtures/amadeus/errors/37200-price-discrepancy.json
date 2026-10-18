@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 37200,
+      "title": "PRICE DISCREPANCY",
+      "detail": "Current grandTotal price (41716.00) is different from request (40366.00)",
+      "source": { "pointer": "/data/flightOffers/0/price/grandTotal" }
+    }
+  ]
+}

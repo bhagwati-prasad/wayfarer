@@ -1,0 +1,2618 @@
+{
+  "meta": {
+    "count": 14,
+    "oneWayCombinations": [
+      { "originDestinationId": "1", "flightOfferIds": ["9", "10", "11"] },
+      { "originDestinationId": "2", "flightOfferIds": ["12", "13", "14"] }
+    ]
+  },
+  "data": [
+    {
+      "type": "flight-offer",
+      "id": "1",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-20T06:10:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T08:25:00" },
+              "carrierCode": "6E",
+              "number": "2134",
+              "aircraft": { "code": "32N" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT2H15M",
+              "id": "1",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 92, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T19:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-27T21:15:00" },
+              "carrierCode": "6E",
+              "number": "5213",
+              "aircraft": { "code": "32N" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT2H15M",
+              "id": "10",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 92, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "35907.00",
+        "base": "31620.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "35907.00",
+        "additionalServices": [{ "amount": "1500.00", "type": "CHECKED_BAGS" }]
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["6E"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10919.00", "base": "9540.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              },
+              "amenities": [
+                { "description": "CABIN BAG 7KG", "isChargeable": false, "amenityType": "BAGGAGE" },
+                {
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SNACK AND BEVERAGE",
+                  "isChargeable": true,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES"
+                }
+              ]
+            },
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              },
+              "amenities": [
+                { "description": "CABIN BAG 7KG", "isChargeable": false, "amenityType": "BAGGAGE" },
+                {
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SNACK AND BEVERAGE",
+                  "isChargeable": true,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10919.00", "base": "9540.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              },
+              "amenities": [
+                { "description": "CABIN BAG 7KG", "isChargeable": false, "amenityType": "BAGGAGE" },
+                {
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SNACK AND BEVERAGE",
+                  "isChargeable": true,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES"
+                }
+              ]
+            },
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              },
+              "amenities": [
+                { "description": "CABIN BAG 7KG", "isChargeable": false, "amenityType": "BAGGAGE" },
+                {
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE"
+                },
+                {
+                  "description": "SNACK AND BEVERAGE",
+                  "isChargeable": true,
+                  "amenityType": "MEAL"
+                },
+                {
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT"
+                },
+                {
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "10919.00", "base": "9540.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            },
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "3150.00", "base": "3000.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "2",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+              "carrierCode": "AI",
+              "number": "865",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H15M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "32017.54",
+        "base": "27915.75",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "32017.54"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "11186.75",
+            "base": "9795.00",
+            "taxes": [
+              { "amount": "489.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": {
+            "currency": "INR",
+            "total": "11186.75",
+            "base": "9795.00",
+            "taxes": [
+              { "amount": "489.75", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }],
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 15KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "050",
+                  "description": "STANDARD SEAT SELECTION",
+                  "isChargeable": true,
+                  "amenityType": "PRE_RESERVED_SEAT",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "059",
+                  "description": "CHANGE FEE APPLIES",
+                  "isChargeable": true,
+                  "amenityType": "BRANDED_FARES",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "05Z",
+                  "description": "MILEAGE ACCRUAL 50 PCT",
+                  "isChargeable": false,
+                  "amenityType": "FREQUENT_FLYER",
+                  "amenityProvider": { "name": "BrandedFare" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": {
+            "currency": "INR",
+            "total": "8615.56",
+            "base": "7346.25",
+            "taxes": [
+              { "amount": "367.31", "code": "K3" },
+              { "amount": "248.00", "code": "IN" },
+              { "amount": "182.00", "code": "P2" },
+              { "amount": "472.00", "code": "WO" }
+            ]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }]
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "mealServices": [{ "label": "Meal" }]
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": {
+            "currency": "INR",
+            "total": "1028.48",
+            "base": "979.50",
+            "taxes": [{ "amount": "48.98", "code": "K3" }]
+          },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "3",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 2,
+      "itineraries": [
+        {
+          "duration": "PT4H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T09:40:00" },
+              "arrival": { "iataCode": "AMD", "terminal": "1", "at": "2026-11-20T11:15:00" },
+              "carrierCode": "AI",
+              "number": "441",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT1H35M",
+              "id": "3",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 71, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "AMD", "terminal": "1", "at": "2026-11-20T12:30:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T13:55:00" },
+              "carrierCode": "AI",
+              "number": "9811",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "IX" },
+              "duration": "PT1H25M",
+              "id": "4",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 48, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "31188.94",
+        "base": "25863.75",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "31188.94"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10872.75", "base": "9075.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10872.75", "base": "9075.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "8490.56", "base": "6806.25" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "952.88", "base": "907.50" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "4",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 7,
+      "itineraries": [
+        {
+          "duration": "PT3H45M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-20T14:20:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T18:05:00" },
+              "carrierCode": "6E",
+              "number": "6011",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT3H45M",
+              "id": "5",
+              "numberOfStops": 1,
+              "stops": [
+                {
+                  "iataCode": "JAI",
+                  "duration": "PT45M",
+                  "arrivalAt": "2026-11-20T15:15:00",
+                  "departureAt": "2026-11-20T16:00:00"
+                }
+              ],
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 118, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T10:20:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-27T12:35:00" },
+              "carrierCode": "6E",
+              "number": "318",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT2H15M",
+              "id": "16",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 94, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "33733.50",
+        "base": "29550.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "33733.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["6E"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10194.50", "base": "8850.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "5",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "16",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10194.50", "base": "8850.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "5",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "16",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "10194.50", "base": "8850.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "5",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "16",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "3150.00", "base": "3000.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "5",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "16",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "5",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-25",
+      "numberOfBookableSeats": 3,
+      "itineraries": [
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T17:30:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T19:40:00" },
+              "carrierCode": "AI",
+              "number": "887",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "6",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 176, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T20:30:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T22:40:00" },
+              "carrierCode": "AI",
+              "number": "888",
+              "aircraft": { "code": "788" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "12",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 176, "weightUnit": "KG", "cabin": "BUSINESS" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "123044.40",
+        "base": "107445.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "123044.40"
+      },
+      "pricingOptions": {
+        "fareType": ["PUBLISHED"],
+        "includedCheckedBagsOnly": true,
+        "refundableFare": true
+      },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "43126.00", "base": "37700.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "6",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 35KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "PREMIUM MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "LOUNGE ACCESS",
+                  "isChargeable": false,
+                  "amenityType": "LOUNGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "RECLINER SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 42, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                },
+                { "description": "POWER OUTLET", "isChargeable": false, "amenityType": "POWER" }
+              ]
+            },
+            {
+              "segmentId": "12",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 35KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "PREMIUM MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "LOUNGE ACCESS",
+                  "isChargeable": false,
+                  "amenityType": "LOUNGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "RECLINER SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 42, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                },
+                { "description": "POWER OUTLET", "isChargeable": false, "amenityType": "POWER" }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "43126.00", "base": "37700.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "6",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 35KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "PREMIUM MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "LOUNGE ACCESS",
+                  "isChargeable": false,
+                  "amenityType": "LOUNGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "RECLINER SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 42, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                },
+                { "description": "POWER OUTLET", "isChargeable": false, "amenityType": "POWER" }
+              ]
+            },
+            {
+              "segmentId": "12",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" },
+              "amenities": [
+                {
+                  "code": "0GO",
+                  "description": "CHECKED BAG 35KG",
+                  "isChargeable": false,
+                  "amenityType": "BAGGAGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "code": "0B3",
+                  "description": "PREMIUM MEAL",
+                  "isChargeable": false,
+                  "amenityType": "MEAL",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "LOUNGE ACCESS",
+                  "isChargeable": false,
+                  "amenityType": "LOUNGE",
+                  "amenityProvider": { "name": "BrandedFare" }
+                },
+                {
+                  "description": "RECLINER SEAT",
+                  "isChargeable": false,
+                  "amenityType": "SEAT",
+                  "amenitySeat": { "legSpace": 42, "spaceUnit": "INCHES", "tilt": "NORMAL" }
+                },
+                { "description": "POWER OUTLET", "isChargeable": false, "amenityType": "POWER" }
+              ]
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "32570.00", "base": "28275.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "6",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "12",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "4222.40", "base": "3770.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "6",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "12",
+              "cabin": "BUSINESS",
+              "fareBasis": "DU1YXSII",
+              "brandedFare": "BUSCLASSIC",
+              "brandedFareLabel": "BUSINESS CLASSIC",
+              "class": "D",
+              "includedCheckedBags": { "weight": 35, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 10, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ],
+      "fareRules": {
+        "currency": "INR",
+        "rules": [
+          {
+            "category": "REFUND",
+            "isChargeable": true,
+            "maxPenaltyAmount": "3500.00",
+            "descriptions": [
+              {
+                "descriptionType": "PENALTIES",
+                "text": "CANCELLATION PERMITTED BEFORE DEPARTURE AGAINST A FEE OF INR 3500 PER PASSENGER"
+              }
+            ]
+          },
+          { "category": "EXCHANGE", "isChargeable": true, "maxPenaltyAmount": "3000.00" },
+          { "category": "REVALIDATION", "notApplicable": true }
+        ]
+      }
+    },
+    {
+      "type": "flight-offer",
+      "id": "6",
+      "source": "GDS",
+      "instantTicketingRequired": true,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-18",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T21:30:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T23:40:00" },
+              "carrierCode": "IX",
+              "number": "1135",
+              "aircraft": { "code": "7M8" },
+              "operating": { "carrierCode": "IX" },
+              "duration": "PT2H10M",
+              "id": "7",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 86, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T07:25:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T09:35:00" },
+              "carrierCode": "IX",
+              "number": "1136",
+              "aircraft": { "code": "7M8" },
+              "operating": { "carrierCode": "IX" },
+              "duration": "PT2H10M",
+              "id": "13",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 86, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "30489.00",
+        "base": "26460.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "30489.00",
+        "additionalServices": [{ "amount": "1250.00", "type": "CHECKED_BAGS" }]
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["IX"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "9113.00", "base": "7820.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "7",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            },
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "9113.00", "base": "7820.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "7",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            },
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "9113.00", "base": "7820.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "7",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            },
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" },
+              "additionalServices": {
+                "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+              }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "3150.00", "base": "3000.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "7",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "7",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-19",
+      "numberOfBookableSeats": 5,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T05:45:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T08:00:00" },
+              "carrierCode": "SG",
+              "number": "8701",
+              "aircraft": { "code": "738" },
+              "operating": { "carrierCode": "SG" },
+              "duration": "PT2H15M",
+              "id": "8",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 101, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T21:35:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T23:50:00" },
+              "carrierCode": "SG",
+              "number": "8702",
+              "aircraft": { "code": "738" },
+              "operating": { "carrierCode": "SG" },
+              "duration": "PT2H15M",
+              "id": "14",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 101, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "34489.50",
+        "base": "30270.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "34489.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["SG"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10446.50", "base": "9090.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "8",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "14",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10446.50", "base": "9090.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "8",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "14",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "10446.50", "base": "9090.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "8",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "14",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "3150.00", "base": "3000.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "8",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "14",
+              "cabin": "ECONOMY",
+              "fareBasis": "SAVERSG",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "8",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": false,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 6,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-20T11:05:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T13:20:00" },
+              "carrierCode": "QP",
+              "number": "1123",
+              "aircraft": { "code": "7M8" },
+              "operating": { "carrierCode": "QP" },
+              "duration": "PT2H15M",
+              "id": "9",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 85, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        },
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T15:10:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-27T17:25:00" },
+              "carrierCode": "QP",
+              "number": "1124",
+              "aircraft": { "code": "7M8" },
+              "operating": { "carrierCode": "QP" },
+              "duration": "PT2H15M",
+              "id": "15",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 85, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "34930.50",
+        "base": "30690.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "34930.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["QP"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10593.50", "base": "9230.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "15",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "10593.50", "base": "9230.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "15",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "10593.50", "base": "9230.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "15",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "3150.00", "base": "3000.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "9",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "15",
+              "cabin": "ECONOMY",
+              "fareBasis": "QPSAVER",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "9",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-20T06:10:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T08:25:00" },
+              "carrierCode": "6E",
+              "number": "2134",
+              "aircraft": { "code": "32N" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT2H15M",
+              "id": "1",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 92, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "17386.50",
+        "base": "15450.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "17386.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["6E"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5270.50", "base": "4650.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5270.50", "base": "4650.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "5270.50", "base": "4650.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "1575.00", "base": "1500.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "1",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "10",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+              "carrierCode": "AI",
+              "number": "865",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H15M",
+              "id": "2",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "15587.85",
+        "base": "13737.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "15587.85"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5449.00", "base": "4820.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5449.00", "base": "4820.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "4183.75", "base": "3615.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "506.10", "base": "482.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "2",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "11",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 2,
+      "itineraries": [
+        {
+          "duration": "PT4H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T09:40:00" },
+              "arrival": { "iataCode": "AMD", "terminal": "1", "at": "2026-11-20T11:15:00" },
+              "carrierCode": "AI",
+              "number": "441",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT1H35M",
+              "id": "3",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 71, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            },
+            {
+              "departure": { "iataCode": "AMD", "terminal": "1", "at": "2026-11-20T12:30:00" },
+              "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T13:55:00" },
+              "carrierCode": "AI",
+              "number": "9811",
+              "aircraft": { "code": "320" },
+              "operating": { "carrierCode": "IX" },
+              "duration": "PT1H25M",
+              "id": "4",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 48, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "14759.25",
+        "base": "11685.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "14759.25"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5135.00", "base": "4100.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5135.00", "base": "4100.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "4058.75", "base": "3075.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "430.50", "base": "410.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "3",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            },
+            {
+              "segmentId": "4",
+              "cabin": "ECONOMY",
+              "fareBasis": "SU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "S",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "12",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-20",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT2H15M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T19:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "1", "at": "2026-11-27T21:15:00" },
+              "carrierCode": "6E",
+              "number": "5213",
+              "aircraft": { "code": "32N" },
+              "operating": { "carrierCode": "6E" },
+              "duration": "PT2H15M",
+              "id": "10",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 92, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "18520.50",
+        "base": "16170.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "18520.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["6E"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5648.50", "base": "4890.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5648.50", "base": "4890.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "5648.50", "base": "4890.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "1575.00", "base": "1500.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "10",
+              "cabin": "ECONOMY",
+              "fareBasis": "R0IP",
+              "class": "R",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "13",
+      "source": "GDS",
+      "instantTicketingRequired": false,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-21",
+      "numberOfBookableSeats": 4,
+      "itineraries": [
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+              "carrierCode": "AI",
+              "number": "864",
+              "aircraft": { "code": "321" },
+              "operating": { "carrierCode": "AI" },
+              "duration": "PT2H10M",
+              "id": "11",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "16429.69",
+        "base": "14178.75",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "16429.69"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["AI"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5737.75", "base": "4975.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "5737.75", "base": "4975.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "4431.81", "base": "3731.25" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "522.38", "base": "497.50" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "11",
+              "cabin": "ECONOMY",
+              "fareBasis": "UU1YXSII",
+              "brandedFare": "ECOVALUE",
+              "brandedFareLabel": "ECO VALUE",
+              "class": "U",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "flight-offer",
+      "id": "14",
+      "source": "GDS",
+      "instantTicketingRequired": true,
+      "nonHomogeneous": false,
+      "oneWay": true,
+      "paymentCardRequired": false,
+      "lastTicketingDate": "2026-10-18",
+      "numberOfBookableSeats": 9,
+      "itineraries": [
+        {
+          "duration": "PT2H10M",
+          "segments": [
+            {
+              "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T07:25:00" },
+              "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T09:35:00" },
+              "carrierCode": "IX",
+              "number": "1136",
+              "aircraft": { "code": "7M8" },
+              "operating": { "carrierCode": "IX" },
+              "duration": "PT2H10M",
+              "id": "13",
+              "numberOfStops": 0,
+              "blacklistedInEU": false,
+              "co2Emissions": [{ "weight": 86, "weightUnit": "KG", "cabin": "ECONOMY" }]
+            }
+          ]
+        }
+      ],
+      "price": {
+        "currency": "INR",
+        "total": "15307.50",
+        "base": "13110.00",
+        "fees": [
+          { "amount": "0.00", "type": "SUPPLIER" },
+          { "amount": "0.00", "type": "TICKETING" }
+        ],
+        "grandTotal": "15307.50"
+      },
+      "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+      "validatingAirlineCodes": ["IX"],
+      "travelerPricings": [
+        {
+          "travelerId": "1",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "4577.50", "base": "3870.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "2",
+          "fareOption": "STANDARD",
+          "travelerType": "ADULT",
+          "price": { "currency": "INR", "total": "4577.50", "base": "3870.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "3",
+          "fareOption": "STANDARD",
+          "travelerType": "CHILD",
+          "price": { "currency": "INR", "total": "4577.50", "base": "3870.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        },
+        {
+          "travelerId": "4",
+          "fareOption": "STANDARD",
+          "travelerType": "HELD_INFANT",
+          "associatedAdultId": "1",
+          "price": { "currency": "INR", "total": "1575.00", "base": "1500.00" },
+          "fareDetailsBySegment": [
+            {
+              "segmentId": "13",
+              "cabin": "ECONOMY",
+              "fareBasis": "QOWIX",
+              "class": "Q",
+              "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+              "includedCabinBags": { "weight": 7, "weightUnit": "KG" }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "dictionaries": {
+    "locations": {
+      "AMD": { "cityCode": "AMD", "countryCode": "IN" },
+      "BOM": { "cityCode": "BOM", "countryCode": "IN" },
+      "DEL": { "cityCode": "DEL", "countryCode": "IN" },
+      "JAI": { "cityCode": "JAI", "countryCode": "IN" }
+    },
+    "aircraft": {
+      "320": "AIRBUS A320",
+      "321": "AIRBUS A321",
+      "738": "BOEING 737-800",
+      "788": "BOEING 787-8",
+      "32N": "AIRBUS A320NEO",
+      "7M8": "BOEING 737 MAX 8"
+    },
+    "currencies": { "INR": "INDIAN RUPEE" },
+    "carriers": {
+      "6E": "INDIGO",
+      "AI": "AIR INDIA",
+      "IX": "AIR INDIA EXPRESS",
+      "QP": "AKASA AIR",
+      "SG": "SPICEJET"
+    }
+  }
+}

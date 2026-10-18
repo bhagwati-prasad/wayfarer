@@ -28,7 +28,7 @@
  * @typedef {SdkErrorOptions & { status?: number, problem?: Problem, issues?: ProblemIssue[], meta?: Record<string, unknown> }} ApiErrorOptions
  */
 /** @typedef {'unauthenticated'|'expired'|'forbidden'|'invalid_credentials'|'mfa_required'|'otp_invalid'|'otp_expired'|'locked'} AuthReason */
-/** @typedef {'sold_out'|'withdrawn'|'schedule_changed'} OfferUnavailableReason */
+/** @typedef {'sold_out'|'withdrawn'|'schedule_changed'|'waitlist'|'on_request'} OfferUnavailableReason */
 /** @typedef {'create'|'hold'|'confirm'|'ticketing'} BookingStage */
 /** @typedef {'retry_payment'|'search_again'|'contact_support'|'wait'} BookingSuggestedAction */
 /** @typedef {'declined'|'insufficient_funds'|'authentication_failed'|'expired'|'cancelled'|'gateway'|'fraud'|'method_unavailable'|'requires_action'} PaymentReason */
@@ -576,6 +576,8 @@ const OFFER_UNAVAILABLE_REASONS = /** @type {const} */ ([
   'sold_out',
   'withdrawn',
   'schedule_changed',
+  'waitlist',
+  'on_request',
 ]);
 const OFFER_UNAVAILABLE_CODE_REASON = Object.freeze({
   SOLD_OUT: 'sold_out',
@@ -584,7 +586,10 @@ const OFFER_UNAVAILABLE_CODE_REASON = Object.freeze({
   OFFER_UNAVAILABLE: 'withdrawn',
 });
 
-/** The offer (`offerId`) is no longer bookable: `sold_out` | `withdrawn` | `schedule_changed`. */
+/**
+ * The offer (`offerId`) is no longer bookable: `sold_out` | `withdrawn` | `schedule_changed` |
+ * `waitlist` (booking class waitlisted) | `on_request` (booking class on request).
+ */
 export class OfferUnavailableError extends ApiError {
   /** @param {string} message @param {ApiErrorOptions & { offerId?: string, reason?: OfferUnavailableReason }} [options] */
   constructor(message, options = {}) {

@@ -1,0 +1,13 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 34107,
+      "title": "NOT APPLICABLE FARE",
+      "detail": "The fare UU1YXSII is no longer available for the requested class of service",
+      "source": {
+        "pointer": "/data/flightOffers/0/travelerPricings/0/fareDetailsBySegment/0/fareBasis"
+      }
+    }
+  ]
+}

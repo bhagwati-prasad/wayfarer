@@ -1,0 +1,446 @@
+{
+  "meta": {
+    "count": 1,
+    "links": {
+      "self": "https://api.ota.com/v1/booking/flight-orders/by-reference?reference=Q8ZX4M&originSystemCode=GDS"
+    }
+  },
+  "data": [
+    {
+      "type": "flight-order",
+      "id": "eJzTd9f3NjIJdzUGAAp%2FAiY%3D",
+      "queuingOfficeId": "DELI12345",
+      "ownerOfficeId": "DELI12345",
+      "associatedRecords": [
+        {
+          "reference": "Q8ZX4M",
+          "creationDate": "2026-10-18T14:42:00.000",
+          "originSystemCode": "GDS",
+          "flightOfferId": "1"
+        },
+        {
+          "reference": "H7K2PQ",
+          "creationDate": "2026-10-18T14:42:00.000",
+          "originSystemCode": "AI",
+          "flightOfferId": "1"
+        }
+      ],
+      "flightOffers": [
+        {
+          "type": "flight-offer",
+          "id": "1",
+          "source": "GDS",
+          "instantTicketingRequired": false,
+          "nonHomogeneous": false,
+          "oneWay": false,
+          "paymentCardRequired": false,
+          "lastTicketingDate": "2026-10-21",
+          "numberOfBookableSeats": 4,
+          "itineraries": [
+            {
+              "duration": "PT2H15M",
+              "segments": [
+                {
+                  "departure": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-20T07:00:00" },
+                  "arrival": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-20T09:15:00" },
+                  "carrierCode": "AI",
+                  "number": "865",
+                  "aircraft": { "code": "321" },
+                  "operating": { "carrierCode": "AI" },
+                  "duration": "PT2H15M",
+                  "id": "2",
+                  "numberOfStops": 0,
+                  "blacklistedInEU": false,
+                  "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }],
+                  "bookingStatus": "CONFIRMED",
+                  "segmentType": "ACTIVE",
+                  "isFlown": false
+                }
+              ]
+            },
+            {
+              "duration": "PT2H10M",
+              "segments": [
+                {
+                  "departure": { "iataCode": "BOM", "terminal": "2", "at": "2026-11-27T18:00:00" },
+                  "arrival": { "iataCode": "DEL", "terminal": "3", "at": "2026-11-27T20:10:00" },
+                  "carrierCode": "AI",
+                  "number": "864",
+                  "aircraft": { "code": "321" },
+                  "operating": { "carrierCode": "AI" },
+                  "duration": "PT2H10M",
+                  "id": "11",
+                  "numberOfStops": 0,
+                  "blacklistedInEU": false,
+                  "co2Emissions": [{ "weight": 95, "weightUnit": "KG", "cabin": "ECONOMY" }],
+                  "bookingStatus": "CONFIRMED",
+                  "segmentType": "ACTIVE",
+                  "isFlown": false
+                }
+              ]
+            }
+          ],
+          "price": {
+            "currency": "INR",
+            "total": "32017.54",
+            "base": "27915.75",
+            "fees": [
+              { "amount": "0.00", "type": "SUPPLIER" },
+              { "amount": "0.00", "type": "TICKETING" },
+              { "amount": "0.00", "type": "FORM_OF_PAYMENT" }
+            ],
+            "grandTotal": "32017.54",
+            "billingCurrency": "INR"
+          },
+          "pricingOptions": { "fareType": ["PUBLISHED"], "includedCheckedBagsOnly": true },
+          "validatingAirlineCodes": ["AI"],
+          "travelerPricings": [
+            {
+              "travelerId": "1",
+              "fareOption": "STANDARD",
+              "travelerType": "ADULT",
+              "price": {
+                "currency": "INR",
+                "total": "11186.75",
+                "base": "9795.00",
+                "taxes": [
+                  { "amount": "489.75", "code": "K3" },
+                  { "amount": "248.00", "code": "IN" },
+                  { "amount": "182.00", "code": "P2" },
+                  { "amount": "472.00", "code": "WO" }
+                ],
+                "refundableTaxes": "902.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "2",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                },
+                {
+                  "segmentId": "11",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                }
+              ]
+            },
+            {
+              "travelerId": "2",
+              "fareOption": "STANDARD",
+              "travelerType": "ADULT",
+              "price": {
+                "currency": "INR",
+                "total": "11186.75",
+                "base": "9795.00",
+                "taxes": [
+                  { "amount": "489.75", "code": "K3" },
+                  { "amount": "248.00", "code": "IN" },
+                  { "amount": "182.00", "code": "P2" },
+                  { "amount": "472.00", "code": "WO" }
+                ],
+                "refundableTaxes": "902.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "2",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                },
+                {
+                  "segmentId": "11",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                }
+              ]
+            },
+            {
+              "travelerId": "3",
+              "fareOption": "STANDARD",
+              "travelerType": "CHILD",
+              "price": {
+                "currency": "INR",
+                "total": "8615.56",
+                "base": "7346.25",
+                "taxes": [
+                  { "amount": "367.31", "code": "K3" },
+                  { "amount": "248.00", "code": "IN" },
+                  { "amount": "182.00", "code": "P2" },
+                  { "amount": "472.00", "code": "WO" }
+                ],
+                "refundableTaxes": "902.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "2",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                },
+                {
+                  "segmentId": "11",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" },
+                  "additionalServices": {
+                    "chargeableCheckedBags": { "id": "1", "weight": 10, "weightUnit": "KG" }
+                  },
+                  "mealServices": [{ "label": "Meal" }]
+                }
+              ]
+            },
+            {
+              "travelerId": "4",
+              "fareOption": "STANDARD",
+              "travelerType": "HELD_INFANT",
+              "associatedAdultId": "1",
+              "price": {
+                "currency": "INR",
+                "total": "1028.48",
+                "base": "979.50",
+                "taxes": [{ "amount": "48.98", "code": "K3" }],
+                "refundableTaxes": "0.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "2",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" }
+                },
+                {
+                  "segmentId": "11",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "UU1YXSII",
+                  "brandedFare": "ECOVALUE",
+                  "brandedFareLabel": "ECO VALUE",
+                  "class": "U",
+                  "includedCheckedBags": { "weight": 15, "weightUnit": "KG" }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "travelers": [
+        {
+          "id": "1",
+          "dateOfBirth": "1988-04-12",
+          "gender": "MALE",
+          "name": { "firstName": "ROHAN", "lastName": "SHARMA" },
+          "documents": [
+            {
+              "documentType": "PASSPORT",
+              "number": "Z4518723",
+              "issuanceDate": "2021-06-01",
+              "expiryDate": "2031-05-31",
+              "issuanceCountry": "IN",
+              "issuanceLocation": "DELHI",
+              "validityCountry": "IN",
+              "nationality": "IN",
+              "birthPlace": "NEW DELHI",
+              "holder": true
+            }
+          ],
+          "emergencyContact": {
+            "addresseeName": "VIKRAM SHARMA",
+            "countryCode": "IN",
+            "number": "9811099887",
+            "text": "BROTHER"
+          },
+          "loyaltyPrograms": [{ "programOwner": "AI", "id": "AI12345678" }],
+          "contact": {
+            "emailAddress": "rohan.sharma@example.com",
+            "phones": [
+              { "deviceType": "MOBILE", "countryCallingCode": "91", "number": "9811012345" }
+            ]
+          }
+        },
+        {
+          "id": "2",
+          "dateOfBirth": "1990-07-23",
+          "gender": "FEMALE",
+          "name": { "firstName": "PRIYA", "lastName": "SHARMA" },
+          "documents": [
+            {
+              "documentType": "PASSPORT",
+              "number": "Z7781920",
+              "issuanceDate": "2022-02-14",
+              "expiryDate": "2032-02-13",
+              "issuanceCountry": "IN",
+              "nationality": "IN",
+              "holder": true
+            }
+          ],
+          "contact": {
+            "emailAddress": "rohan.sharma@example.com",
+            "phones": [
+              { "deviceType": "MOBILE", "countryCallingCode": "91", "number": "9811012345" }
+            ]
+          }
+        },
+        {
+          "id": "3",
+          "dateOfBirth": "2018-02-05",
+          "gender": "MALE",
+          "name": { "firstName": "AARAV", "lastName": "SHARMA" },
+          "documents": [
+            {
+              "documentType": "PASSPORT",
+              "number": "Z9034412",
+              "issuanceDate": "2023-08-20",
+              "expiryDate": "2028-08-19",
+              "issuanceCountry": "IN",
+              "nationality": "IN",
+              "holder": true
+            }
+          ]
+        },
+        {
+          "id": "4",
+          "dateOfBirth": "2025-09-14",
+          "gender": "FEMALE",
+          "name": { "firstName": "MYRA", "lastName": "SHARMA" }
+        }
+      ],
+      "remarks": {
+        "general": [
+          { "subType": "GENERAL_MISCELLANEOUS", "text": "ONLINE BOOKING FROM WAYFARER" },
+          {
+            "subType": "INVOICE",
+            "text": "GSTIN 06AABCA1234F1Z5 ACME INFOTECH PVT LTD",
+            "flightOfferIds": ["1"]
+          }
+        ],
+        "airline": [
+          {
+            "subType": "OTHER_SERVICE_INFORMATION",
+            "airlineCode": "AI",
+            "text": "CTCM 919811012345",
+            "travelerIds": ["1"]
+          }
+        ]
+      },
+      "formOfPayments": [{ "other": { "method": "CASH", "flightOfferIds": ["1"] } }],
+      "ticketingAgreement": {
+        "option": "DELAY_TO_CANCEL",
+        "delay": "1D",
+        "dateTime": "2026-10-19T00:00:00.000",
+        "segmentIds": ["2", "11"]
+      },
+      "contacts": [
+        {
+          "addresseeName": { "firstName": "ROHAN", "lastName": "SHARMA" },
+          "purpose": "STANDARD",
+          "phones": [
+            { "deviceType": "MOBILE", "countryCallingCode": "91", "number": "9811012345" }
+          ],
+          "emailAddress": "rohan.sharma@example.com",
+          "address": {
+            "lines": ["12 Lodhi Road", "Jor Bagh"],
+            "postalCode": "110003",
+            "cityName": "New Delhi",
+            "stateName": "Delhi",
+            "countryCode": "IN"
+          }
+        },
+        {
+          "addresseeName": { "firstName": "ACCOUNTS", "lastName": "PAYABLE" },
+          "companyName": "ACME INFOTECH PVT LTD",
+          "purpose": "INVOICE",
+          "phones": [
+            { "deviceType": "LANDLINE", "countryCallingCode": "91", "number": "1140001234" }
+          ],
+          "emailAddress": "accounts@acme-infotech.example",
+          "address": {
+            "lines": ["Tower B, Cyber City"],
+            "postalCode": "122002",
+            "cityName": "Gurugram",
+            "stateName": "Haryana",
+            "countryCode": "IN"
+          }
+        }
+      ],
+      "tickets": [
+        {
+          "documentType": "ETICKET",
+          "documentNumber": "0982140012345",
+          "documentStatus": "ISSUED",
+          "travelerId": "1",
+          "segmentIds": ["2", "11"]
+        },
+        {
+          "documentType": "ETICKET",
+          "documentNumber": "0982140012346",
+          "documentStatus": "ISSUED",
+          "travelerId": "2",
+          "segmentIds": ["2", "11"]
+        },
+        {
+          "documentType": "ETICKET",
+          "documentNumber": "0982140012347",
+          "documentStatus": "ISSUED",
+          "travelerId": "3",
+          "segmentIds": ["2", "11"]
+        },
+        {
+          "documentType": "ETICKET",
+          "documentNumber": "0982140012348",
+          "documentStatus": "ISSUED",
+          "travelerId": "4",
+          "segmentIds": ["2", "11"]
+        }
+      ]
+    }
+  ],
+  "dictionaries": {
+    "locations": {
+      "BOM": { "cityCode": "BOM", "countryCode": "IN" },
+      "DEL": { "cityCode": "DEL", "countryCode": "IN" }
+    }
+  }
+}

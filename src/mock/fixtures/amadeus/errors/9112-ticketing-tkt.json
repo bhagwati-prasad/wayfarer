@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 9112,
+      "title": "TICKETING - TKT",
+      "detail": "Ticketing failed for traveler 2: airline rejected the form of payment",
+      "source": { "pointer": "/data/formOfPayments/0" }
+    }
+  ]
+}

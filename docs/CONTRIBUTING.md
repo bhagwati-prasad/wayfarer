@@ -76,6 +76,8 @@ now()       injectable clock (ms)          timers      { setTimeout, clearTimeou
 - Fixtures are JSON in `src/mock/fixtures/`. For Amadeus‑backed endpoints the fixture **must** validate against the matching definition in `amadeus/*.json` (helper: `test/helpers/swagger.js` → `validateAgainst(specFile, definitionName, payload)`).
 - Each module test covers: happy path, validation error, backend problem+json mapped to the right `SdkError`, emitted events, state transitions, timers/pollers via fake timers, `destroy()` leaving no listeners or timers.
 - `npm test`, `npm run lint`, `npm run types` must pass before a change is considered done.
+- Module tests build their context with `test/helpers/ctx.js`: `createTestContext({ config?, modules?, fetch?, now?, timers?, authenticated?, guest?, payments? })` returns a real, network‑free `ModuleContext` (memory‑driven storage, `https://api.ota.com`, the default interceptors, `ctx.modules` resolving the given stubs / lazy factories) plus `http`, `store`, `events`, `storage`, `auth`, `access`, `endpoints`, `emitted()`, `authenticateAs(user, tokens)` (via `auth.setTokens`), `asGuest()` / `guest: true` (the guest identity seeded the way `createAuth` restores it) and `destroy()`; `createTestClient({ modules, config, isolate? })` builds a full client through `createClient` with those factories merged over `MODULE_FACTORIES`.
+- Point MSW at it with `server.use(...)` from `test/setup.js`; `fetch` / `now` / `timers` are injectable (`vi.useFakeTimers()` flows through `ctx.timers`), and `destroy()` must leave `vi.getTimerCount()` at 0.
 
 ## 7. Docs are the spec
 

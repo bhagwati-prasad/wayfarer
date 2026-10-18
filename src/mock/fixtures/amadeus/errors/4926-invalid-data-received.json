@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 4926,
+      "title": "INVALID DATA RECEIVED",
+      "detail": "No flight order found for reference ZZZ999 in system GDS",
+      "source": { "parameter": "reference" }
+    }
+  ]
+}

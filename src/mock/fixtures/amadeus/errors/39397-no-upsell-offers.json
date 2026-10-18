@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 39397,
+      "title": "NO UPSELL OFFERS FOUND",
+      "detail": "No branded fare upsell is available for the requested flight offer",
+      "source": { "pointer": "/data/flightOffers/0" }
+    }
+  ]
+}

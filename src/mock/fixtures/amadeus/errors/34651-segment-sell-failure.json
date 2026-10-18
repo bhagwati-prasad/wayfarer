@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "status": 400,
+      "code": 34651,
+      "title": "SEGMENT SELL FAILURE",
+      "detail": "Could not sell segment 1",
+      "source": { "pointer": "/data/flightOffers/0/itineraries/0/segments/0" }
+    }
+  ]
+}

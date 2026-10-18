@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "status": 409,
+      "code": 2552,
+      "title": "SIMULTANEOUS UPDATE",
+      "detail": "The PNR Q8ZX4M is currently being updated by another process. Retrieve it again before retrying"
+    }
+  ]
+}
