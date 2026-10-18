@@ -4,7 +4,9 @@
  * `TelemetryAdapter` and emit `telemetry:track` on the injected event bus (docs/README.md §6). Calls
  * are gated by `enabled`, by `consent` (when off everything but `flush` is dropped — never buffered)
  * and, for `track` / `timing`, by `sampleRate` decided per call through an injectable `random()`.
- * `context` is merged under the props of every event. `bindDomainEvents` subscribes to the SDK's
+ * `context` is merged under the props of every event, and every adapter receives its own deep copy
+ * of the props, so a sink that mutates what it was handed can corrupt neither the context nor what
+ * the next adapter and the `telemetry:track` listeners see. `bindDomainEvents` subscribes to the SDK's
  * domain events and replays them as GA4 ecommerce events whose `items[]` are built from Offer /
  * Itinerary / Booking payloads (combined `offers[]` and split‑mode `sliceOffers[][]` alike).
  * Reference adapters: `ga4Adapter`, `gtmAdapter`, `segmentAdapter`, `consoleAdapter`,
@@ -16,7 +18,7 @@
  */
 
 import { ConfigError, ValidationError } from '../errors/index.js';
-import { deepMerge, isPlainObject } from './object.js';
+import { clone, deepMerge, isPlainObject } from './object.js';
 
 /** @typedef {import('../types.js').TelemetryAdapter} TelemetryAdapter */
 /** @typedef {import('../types.js').ValidationIssue} ValidationIssue */
@@ -78,7 +80,8 @@ import { deepMerge, isPlainObject } from './object.js';
  * @property {(userId: string|number, traits?: Props) => boolean} identify  Identify the user on the
  *   adapters that implement `identify`. Never sampled; `context` is not merged into traits.
  * @property {(name: string, ms: number, props?: Props) => boolean} timing  Duration measurement,
- *   delivered as `track('timing_complete', { name, value: round(ms), ...props })`.
+ *   delivered as `track('timing_complete', { ...props, name, value: round(ms) })` (`name` and
+ *   `value` always win over same‑named props).
  * @property {(partial: Props) => void} setContext  Deep‑merge into the context; a key set to
  *   `undefined` is removed.
  * @property {(consent: boolean) => void} setConsent  Grant or revoke analytics consent.
@@ -249,6 +252,17 @@ function rateOption(v) {
   return v;
 }
 
+/**
+ * Fresh, sanitised plain data from the given layers (later layers win): `deepMerge` drops
+ * `__proto__` / `constructor` / `prototype` keys and `undefined` values, `clone` then detaches what
+ * `deepMerge` leaves shared (objects inside arrays), so nothing of the inputs stays aliased.
+ * @param {...unknown} layers
+ * @returns {Props}
+ */
+function detach(...layers) {
+  return clone(deepMerge(...layers));
+}
+
 // ── delivery ────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -303,7 +317,7 @@ function sampled(state) {
 }
 
 /**
- * Deliver one event to every adapter, isolating failures.
+ * Deliver one event to every adapter, each on its own copy of `props`, isolating failures.
  * @param {TelemetryState} state
  * @param {TelemetryKind} kind
  * @param {string} event
@@ -312,13 +326,16 @@ function sampled(state) {
 function fanOut(state, kind, event, props) {
   for (const adapter of state.adapters.slice()) {
     try {
+      // A sink that mutates (or deletes from) what it received must not change what the next
+      // adapter or the `telemetry:track` listeners see.
+      const own = clone(props);
       if (kind === 'page') {
-        if (typeof adapter.page === 'function') adapter.page(event, props);
-        else adapter.track(PAGE_EVENT, { ...props, name: event });
+        if (typeof adapter.page === 'function') adapter.page(event, own);
+        else adapter.track(PAGE_EVENT, { ...own, name: event });
       } else if (kind === 'identify') {
-        if (typeof adapter.identify === 'function') adapter.identify(event, props);
+        if (typeof adapter.identify === 'function') adapter.identify(event, own);
       } else {
-        adapter.track(event, props);
+        adapter.track(event, own);
       }
     } catch (e) {
       report(state, adapter, kind, e);
@@ -414,7 +431,7 @@ export function createTelemetry(options = {}) {
     enabled,
     consent,
     sampleRate,
-    context: deepMerge(o.context),
+    context: detach(o.context),
     random: typeof o.random === 'function' ? o.random : Math.random,
     events: o.events || undefined,
     logger: o.logger || undefined,
@@ -422,11 +439,12 @@ export function createTelemetry(options = {}) {
   };
 
   /**
-   * Merge the context under the given layers (later layers win).
+   * Merge the context under the given layers (later layers win) into fresh props that alias
+   * neither the context nor the caller's objects.
    * @param {...unknown} layers
    * @returns {Props}
    */
-  const withContext = (...layers) => deepMerge(state.context, ...layers);
+  const withContext = (...layers) => detach(state.context, ...layers);
 
   /** @type {Telemetry['track']} */
   function track(event, props) {
@@ -447,7 +465,7 @@ export function createTelemetry(options = {}) {
     const ok = isName(userId) || (typeof userId === 'number' && Number.isFinite(userId));
     if (!ok) throw invalid('userId', 'type', 'userId must be a non-empty string or a number');
     const t = assertProps(traits, 'traits');
-    return deliver(state, 'identify', String(userId), deepMerge(t));
+    return deliver(state, 'identify', String(userId), detach(t));
   }
 
   /** @type {Telemetry['timing']} */
@@ -468,7 +486,7 @@ export function createTelemetry(options = {}) {
   /** @type {Telemetry['setContext']} */
   function setContext(partial) {
     if (!isPlainObject(partial)) throw invalid('partial', 'type', 'partial must be a plain object');
-    const next = deepMerge(state.context, partial);
+    const next = detach(state.context, partial);
     for (const key of Object.keys(partial)) {
       if (partial[key] === undefined) delete next[key];
     }
@@ -531,7 +549,7 @@ export function createTelemetry(options = {}) {
       return state.sampleRate;
     },
     get context() {
-      return deepMerge(state.context);
+      return clone(state.context);
     },
     get adapters() {
       return state.adapters.map((a) => a.name);
@@ -867,7 +885,9 @@ const DOMAIN_EVENTS = Object.freeze({
  * `offer`, `itinerary`, `booking`, `trip`, `intent`, `cancellation`) or be the entity itself.
  * Items: `item_id` = offer id, `item_name` = route, `item_brand` = owner airline code, `price` =
  * per‑pax amount, `currency`; lists cover both combined `offers[]` and split‑mode `sliceOffers[][]`
- * and are capped at 200 items. The gates of `telemetry` (enabled, consent, sampling) still apply.
+ * and are capped at 200 items. A payload a mapper cannot read (an amount that cannot be coerced to
+ * a number, a nested getter that throws) is still tracked, with empty props, and never surfaces as
+ * an SDK `error` event. The gates of `telemetry` (enabled, consent, sampling) still apply.
  * Effects: listeners on `events` until the returned `off()` is called (idempotent).
  * @param {Telemetry} telemetry
  * @param {{ on: (event: string, fn: (payload: any) => void) => (() => void) | void, off?: (event: string, fn: (payload: any) => void) => void }} events
@@ -887,7 +907,16 @@ export function bindDomainEvents(telemetry, events) {
     const [commerceEvent, toProps] = DOMAIN_EVENTS[name];
     /** @param {unknown} payload */
     const listener = (payload) => {
-      telemetry.track(commerceEvent, toProps(payload));
+      /** @type {Props} */
+      let props;
+      try {
+        props = toProps(payload);
+      } catch {
+        // Telemetry must never break the app: an unreadable payload still counts as the commerce
+        // event instead of becoming an SDK `error` event.
+        props = {};
+      }
+      telemetry.track(commerceEvent, props);
     };
     const remove = events.on(name, listener);
     offs.push(

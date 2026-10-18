@@ -1357,3 +1357,443 @@ describe('module hygiene', () => {
     expect(typeof globalThis.document).toBe('undefined');
   });
 });
+
+describe('hardening against hostile and unusual input', () => {
+  const offerExpiredBody = {
+    type: 'https://api.ota.com/problems/offer-expired',
+    title: 'Offer expired',
+    status: 410,
+    code: 'OFFER_EXPIRED',
+    offerId: 'o-1',
+  };
+
+  it('server-controlled paths and keys never crash or reach Object.prototype', () => {
+    const before = Object.getOwnPropertyNames(Object.prototype).sort();
+    const err = errorFromProblem({
+      type: 'about:blank',
+      status: 422,
+      errors: [
+        { detail: 'bad', source: { pointer: '/__proto__' } },
+        { detail: 'bad2', source: { pointer: '/__proto__' } },
+        { detail: 'nope', source: { parameter: 'constructor' } },
+        { detail: 'x', path: 'prototype' },
+        { detail: 'y', field: 'hasOwnProperty' },
+        { detail: 'z', source: { pointer: '/__proto__/polluted' } },
+      ],
+    });
+    expect(err).toBeInstanceOf(UnprocessableError);
+    expect(Object.hasOwn(err.fieldErrors, '__proto__')).toBe(true);
+    expect(err.fieldErrors['__proto__']).toEqual(['bad', 'bad2']);
+    expect(err.fieldErrors.constructor).toEqual(['nope']);
+    expect(err.fieldErrors.prototype).toEqual(['x']);
+    expect(err.fieldErrors.hasOwnProperty).toEqual(['y']);
+    expect(err.fieldErrors['__proto__.polluted']).toEqual(['z']);
+    expect(Object.getPrototypeOf(err.fieldErrors)).toBe(Object.prototype);
+
+    const hostile = JSON.parse(
+      '{"type":"about:blank","status":422,"code":"NAME_MISMATCH",' +
+        '"fieldErrors":{"__proto__":["p"],"constructor":"c"},' +
+        '"__proto__":{"polluted":true},"constructor":{"polluted":true}}'
+    );
+    const explicit = errorFromProblem(hostile);
+    expect(explicit).toBeInstanceOf(UnprocessableError);
+    expect(Object.hasOwn(explicit.fieldErrors, '__proto__')).toBe(true);
+    expect(explicit.fieldErrors['__proto__']).toEqual(['p']);
+    expect(explicit.fieldErrors.constructor).toEqual(['c']);
+    expect(Object.getPrototypeOf(explicit.fieldErrors)).toBe(Object.prototype);
+    expect(Object.hasOwn(explicit.details, '__proto__')).toBe(true);
+    expect(explicit.details.constructor).toEqual({ polluted: true });
+    expect(Object.getPrototypeOf(explicit.details)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(explicit.problem)).toBe(Object.prototype);
+
+    const legacy = errorFromResponse(
+      400,
+      JSON.parse('{"code":"PROMO_INVALID","message":"m","__proto__":{"polluted":true}}'),
+      {}
+    );
+    expect(legacy).toBeInstanceOf(UnprocessableError);
+    expect(Object.getPrototypeOf(legacy.problem)).toBe(Object.prototype);
+    expect(Object.hasOwn(legacy.problem, '__proto__')).toBe(false);
+
+    for (const code of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      const byCode = errorFromProblem({ type: 'about:blank', status: 404, code }, { map: {} });
+      expect(byCode).toBeInstanceOf(NotFoundError);
+    }
+    expect({}.polluted).toBeUndefined();
+    expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(before);
+  });
+
+  it('is() never throws for classes without a usable prototype', () => {
+    const arrow = () => {};
+    const err = new NotFoundError('x');
+    expect(() => is(err, arrow)).not.toThrow();
+    expect(is(err, arrow)).toBe(false);
+    expect(is(err, Math.max.bind(null))).toBe(false);
+    expect(
+      is(
+        err,
+        Object.assign(function () {}, { prototype: null })
+      )
+    ).toBe(false);
+    expect(is(err, Error)).toBe(true);
+  });
+
+  it('toUserMessage never surfaces server text smuggled through Money fields', () => {
+    const err = errorFromProblem({
+      type: 'about:blank',
+      status: 409,
+      code: 'PRICE_CHANGED',
+      from: { amount: SERVER_DETAIL, currency: 'INR' },
+      to: { amount: '5400.00', currency: SERVER_DETAIL },
+    });
+    expect(err).toBeInstanceOf(PriceChangedError);
+    expect(err.from).toBeUndefined();
+    expect(err.to).toBeUndefined();
+    const msg = toUserMessage(err);
+    expect(msg.message).not.toContain(SERVER_DETAIL);
+    expect(msg.message).not.toContain('{');
+    expect(msg.title).toBe('Price changed');
+    expect(err.details.from.amount).toBe(SERVER_DETAIL);
+
+    const ok = new PriceChangedError('x', {
+      from: { amount: ' 10.5 ', currency: 'inr' },
+      to: { amount: 12, currency: 'INR' },
+    });
+    expect(ok.from).toEqual({ amount: '10.5', currency: 'INR' });
+    expect(ok.to).toEqual({ amount: '12', currency: 'INR' });
+    expect(toUserMessage(ok).message).toContain('from INR 10.5 to INR 12');
+    for (const bad of [
+      { amount: '1,000', currency: 'INR' },
+      { amount: '1e3', currency: 'INR' },
+      { amount: '10', currency: '' },
+      { amount: '10' },
+      { amount: NaN, currency: 'INR' },
+      { amount: Infinity, currency: 'INR' },
+      { amount: '10', currency: 'INRX' },
+      { amount: '10', currency: 'IN R' },
+      { amount: ['10'], currency: 'INR' },
+    ]) {
+      expect(new PriceChangedError('x', { from: bad, to: bad }).from).toBeUndefined();
+    }
+  });
+
+  it('derives codes from type URLs without mistaking hosts, statuses or files for codes', () => {
+    expect(errorFromProblem({ type: 'https://api.ota.com', status: 404 }).code).toBe('NOT_FOUND');
+    expect(errorFromProblem({ type: 'https://api.ota.com/', status: 409 }).code).toBe('CONFLICT');
+    expect(errorFromProblem({ type: 'HTTPS://API.OTA.COM', status: 409 }).code).toBe('CONFLICT');
+    expect(errorFromProblem({ type: 'https://api.ota.com/problems/404', status: 404 }).code).toBe(
+      'NOT_FOUND'
+    );
+    expect(errorFromProblem({ type: 'ABOUT:BLANK', status: 404 }).code).toBe('NOT_FOUND');
+    expect(
+      errorFromProblem({
+        type: 'https://api.ota.com/problems/offer-expired.html?lang=en#top',
+        status: 410,
+      })
+    ).toBeInstanceOf(OfferExpiredError);
+    expect(
+      errorFromProblem({ type: 'tag:ota.com,2026:search-expired', status: 410 })
+    ).toBeInstanceOf(SearchExpiredError);
+    expect(errorFromProblem({ type: '/problems/itinerary-expired/', status: 410 })).toBeInstanceOf(
+      ItineraryExpiredError
+    );
+    expect(errorFromProblem({ type: 'price_changed', status: 409 })).toBeInstanceOf(
+      PriceChangedError
+    );
+    const twoFa = errorFromProblem({ type: 'about:blank', status: 401, code: '2fa-required' });
+    expect(twoFa.code).toBe('2FA_REQUIRED');
+    expect(twoFa).toBeInstanceOf(AuthError);
+    expect(errorFromProblem({ type: 'about:blank', status: 404, code: '404' }).code).toBe(
+      'NOT_FOUND'
+    );
+    expect(errorFromProblem({ type: 'about:blank', status: 400, code: '___' }).code).toBe(
+      'BAD_REQUEST'
+    );
+    expect(errorFromProblem({ type: 'about:blank', status: 400, code: 'a/b' }).code).toBe(
+      'BAD_REQUEST'
+    );
+  });
+
+  it('a problem without status takes the class default status for a known code', () => {
+    const err = errorFromProblem({ type: 'about:blank', code: 'OFFER_EXPIRED' });
+    expect(err).toBeInstanceOf(OfferExpiredError);
+    expect(err.status).toBe(410);
+    expect(errorFromProblem({ code: 'SESSION_EXPIRED' }).status).toBe(401);
+    expect(errorFromProblem({ code: 'FORBIDDEN' }).status).toBe(403);
+    expect(errorFromProblem({ code: 'VALIDATION_FAILED' }).status).toBe(422);
+    expect(errorFromProblem({ code: 'RATE_LIMITED' }).status).toBe(429);
+    expect(errorFromProblem({ code: 'WHATEVER' }).status).toBe(0);
+    expect(errorFromProblem({ code: 'OFFER_EXPIRED', status: 400 }).status).toBe(400);
+    expect(errorFromProblem({}).status).toBe(0);
+  });
+
+  it('every ApiError default code maps back to the same class through errorFromProblem', () => {
+    for (const [Class] of API_CLASSES) {
+      const sample = new Class('x');
+      const err = errorFromProblem({
+        type: 'about:blank',
+        status: sample.status,
+        code: sample.code,
+      });
+      expect(err.constructor).toBe(Class);
+      expect(err.code).toBe(sample.code);
+      expect(err.status).toBe(sample.status);
+    }
+    const servicing = errorFromProblem({
+      type: 'about:blank',
+      status: 409,
+      code: 'SERVICING_NOT_ALLOWED',
+      action: 'split_pnr',
+      reason: 'ticketed',
+    });
+    expect(servicing).toBeInstanceOf(ServicingError);
+    expect(servicing.action).toBe('split_pnr');
+    expect(servicing.reason).toBe('ticketed');
+  });
+
+  it('wrap recognises network failures from another realm, undici causes and more socket codes', () => {
+    const foreignTypeError = Object.assign(Object.create(Error.prototype), {
+      name: 'TypeError',
+      message: 'Failed to fetch',
+    });
+    expect(foreignTypeError instanceof TypeError).toBe(false);
+    expect(wrap(foreignTypeError)).toBeInstanceOf(NetworkError);
+
+    const undici = wrap(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.ota.com'), {
+          code: 'ENOTFOUND',
+        }),
+      })
+    );
+    expect(undici).toBeInstanceOf(NetworkError);
+    expect(undici.details).toEqual({ code: 'ENOTFOUND' });
+    const causeOnly = wrap(
+      Object.assign(new Error('request failed'), { cause: { code: 'ECONNRESET' } })
+    );
+    expect(causeOnly).toBeInstanceOf(NetworkError);
+    expect(causeOnly.details).toEqual({ code: 'ECONNRESET' });
+    for (const code of ['ETIMEDOUT', 'ECONNABORTED', 'ERR_NETWORK', 'ENETDOWN', 'EHOSTDOWN']) {
+      expect(wrap(Object.assign(new Error('x'), { code }))).toBeInstanceOf(NetworkError);
+    }
+    expect(wrap(new DOMException('A network error occurred.', 'NetworkError'))).toBeInstanceOf(
+      NetworkError
+    );
+    expect(wrap(Object.assign(new Error('x'), { cause: { code: 'OTHER' } })).constructor).toBe(
+      SdkError
+    );
+    expect(wrap(Object.assign(new Error('x'), { cause: 'ENOTFOUND' })).constructor).toBe(SdkError);
+    expect(wrap(Object.assign(new Error('x'), { code: 'OTHER' })).code).toBe('OTHER');
+  });
+
+  it('toUserMessage gives branded errors from another SDK copy the same copy as local ones', () => {
+    const brand = Symbol.for('@wayfarer/sdk/SdkError');
+    class ForeignSdkError extends Error {}
+    Object.defineProperty(ForeignSdkError.prototype, brand, { value: true });
+    Object.defineProperty(ForeignSdkError, 'name', { value: 'SdkError' });
+    class ForeignApiError extends ForeignSdkError {}
+    Object.defineProperty(ForeignApiError, 'name', { value: 'ApiError' });
+    class ForeignAuthError extends ForeignApiError {}
+    Object.defineProperty(ForeignAuthError, 'name', { value: 'AuthError' });
+    class ForeignPriceChangedError extends ForeignApiError {}
+    Object.defineProperty(ForeignPriceChangedError, 'name', { value: 'PriceChangedError' });
+
+    const expired = Object.assign(new ForeignAuthError(SERVER_DETAIL), {
+      code: 'SESSION_EXPIRED',
+      reason: 'expired',
+      retryable: false,
+    });
+    expect(wrap(expired)).toBe(expired);
+    expect(toUserMessage(expired)).toEqual({
+      title: 'Session expired',
+      message: 'Your session has expired. Please sign in again.',
+      action: 'login',
+    });
+    const bogusReason = Object.assign(new ForeignAuthError('x'), { reason: SERVER_DETAIL });
+    expect(toUserMessage(bogusReason).title).toBe('Sign in required');
+    const forged = Object.assign(new ForeignPriceChangedError('x'), {
+      from: { amount: SERVER_DETAIL, currency: 'INR' },
+      to: { amount: '2', currency: 'INR' },
+    });
+    const msg = toUserMessage(forged);
+    expect(msg.title).toBe('Price changed');
+    expect(msg.message).not.toContain(SERVER_DETAIL);
+    const retryable = Object.assign(new ForeignApiError('x'), { retryable: true });
+    expect(toUserMessage(retryable).action).toBe('retry');
+    expect(isRetryable(retryable)).toBe(true);
+    expect(toUserMessage(new ForeignSdkError('x')).title).toBe('Something went wrong');
+  });
+
+  it('legacy error strings: code-shaped → code, sentences → message; error_description is read', () => {
+    const oauth = errorFromResponse(
+      400,
+      { error: 'invalid_grant', error_description: 'Refresh token expired' },
+      {}
+    );
+    expect(oauth.code).toBe('INVALID_GRANT');
+    expect(oauth.message).toBe('Refresh token expired');
+    expect(oauth.details).toEqual({});
+    const sentence = errorFromResponse(500, { error: 'Something went wrong' }, {});
+    expect(sentence.code).toBe('INTERNAL_ERROR');
+    expect(sentence.message).toBe('Something went wrong');
+    expect(sentence.problem.code).toBeUndefined();
+    const mislabeled = errorFromResponse(
+      400,
+      { code: 'PROMO_INVALID', message: 'Unknown promo' },
+      PROBLEM_HEADERS
+    );
+    expect(mislabeled).toBeInstanceOf(UnprocessableError);
+    expect(mislabeled.message).toBe('Unknown promo');
+  });
+
+  it('Retry-After decimals are seconds, letters are dates, anything else is ignored', () => {
+    const now = Date.parse('2026-10-17T10:00:00Z');
+    const at = (header) => errorFromResponse(429, null, { 'retry-after': header }, { now });
+    expect(at('1.5').retryAfterMs).toBe(1500);
+    expect(at('0').retryAfterMs).toBe(0);
+    expect(at('-3').retryAfterMs).toBeUndefined();
+    expect(at('1.2.3').retryAfterMs).toBeUndefined();
+    expect(at('2026-10-17T10:00:05Z').retryAfterMs).toBe(5000);
+    expect(at('Sat, 17 Oct 2026 09:59:00 GMT').retryAfterMs).toBe(0);
+    expect(toUserMessage(at('1.5')).message).toContain('2 seconds');
+  });
+
+  it('reads headers from a mixed-case Map, tuple arrays, and survives broken containers', () => {
+    const mixedMap = errorFromResponse(
+      429,
+      null,
+      new Map([
+        ['Retry-After', '4'],
+        ['X-Request-Id', 'req-m'],
+      ])
+    );
+    expect(mixedMap.retryAfterMs).toBe(4000);
+    expect(mixedMap.requestId).toBe('req-m');
+    const tuples = errorFromResponse(410, offerExpiredBody, [
+      ['Content-Type', 'application/problem+json'],
+      ['x-request-id', ['req-t', 'ignored']],
+    ]);
+    expect(tuples).toBeInstanceOf(OfferExpiredError);
+    expect(tuples.requestId).toBe('req-t');
+    expect(tuples.meta.contentType).toBe('application/problem+json');
+    const throwing = {
+      get() {
+        throw new Error('nope');
+      },
+    };
+    expect(errorFromResponse(404, null, throwing).code).toBe('NOT_FOUND');
+    expect(errorFromResponse(404, null, 'not-headers').code).toBe('NOT_FOUND');
+    expect(errorFromResponse(404, null, [null, 'x', ['content-type']]).code).toBe('NOT_FOUND');
+  });
+
+  it('never throws on hostile input to any exported function', () => {
+    const nasty = [
+      undefined,
+      null,
+      0,
+      1,
+      NaN,
+      '',
+      'x',
+      true,
+      Symbol('s'),
+      () => {},
+      [],
+      [null],
+      {},
+      { status: 'abc' },
+      { type: 42, title: null, status: {} },
+      { errors: 'x' },
+      { errors: [null, 1, 'a', { source: 'x' }], code: 'UNPROCESSABLE' },
+      { fieldErrors: [1], code: 'NAME_MISMATCH' },
+      { from: 1, to: [], code: 'PRICE_CHANGED' },
+      { code: 'RATE_LIMITED', retryAfter: 'soon', retryAfterMs: {} },
+      Object.create(null),
+      new Proxy({}, {}),
+      JSON.parse('{"__proto__":{"a":1},"constructor":{"prototype":{}}}'),
+      { code: 'x'.repeat(10000) },
+      { type: '://' },
+      { type: 'https://' },
+      { type: 'about:blank', status: 400, code: 'X', message: 42, detail: [] },
+    ];
+    for (const input of nasty) {
+      expect(isSdkError(errorFromProblem(input))).toBe(true);
+      expect(isSdkError(errorFromProblem(input, input))).toBe(true);
+      expect(isSdkError(errorFromResponse(input, input, input, input))).toBe(true);
+      expect(isSdkError(wrap(input, input))).toBe(true);
+      expect(typeof toUserMessage(input, input).message).toBe('string');
+      expect(typeof isRetryable(input)).toBe('boolean');
+      expect(is(input, SdkError)).toBe(false);
+      expect(is(new SdkError('x'), input)).toBe(false);
+    }
+  });
+
+  it('does not mutate its inputs; frozen problems, bodies, headers and options are fine', () => {
+    const problem = Object.freeze({
+      type: 'https://api.ota.com/problems/price-changed',
+      status: 409,
+      from: Object.freeze({ amount: '1', currency: 'INR' }),
+      to: Object.freeze({ amount: '2', currency: 'INR' }),
+      errors: Object.freeze([
+        Object.freeze({ detail: 'd', source: Object.freeze({ pointer: '/a' }) }),
+      ]),
+    });
+    const snapshot = JSON.stringify(problem);
+    const headers = Object.freeze({
+      'content-type': 'application/problem+json',
+      'retry-after': '1',
+    });
+    const err = errorFromResponse(409, problem, headers, Object.freeze({ requestId: 'r' }));
+    expect(err).toBeInstanceOf(PriceChangedError);
+    expect(err.from).toEqual({ amount: '1', currency: 'INR' });
+    expect(err.problem).not.toBe(problem);
+    expect(JSON.stringify(problem)).toBe(snapshot);
+    const direct = errorFromProblem(problem, Object.freeze({ map: Object.freeze({}) }));
+    expect(direct).toBeInstanceOf(PriceChangedError);
+    expect(JSON.stringify(problem)).toBe(snapshot);
+    const opts = Object.freeze({ reason: 'expired', meta: Object.freeze({ a: 1 }) });
+    const auth = new AuthError('x', opts);
+    auth.meta.b = 2;
+    expect(opts.meta).toEqual({ a: 1 });
+    expect(auth.meta).toEqual({ a: 1, b: 2 });
+    const frozenError = Object.freeze(new Error('x'));
+    expect(wrap(frozenError).cause).toBe(frozenError);
+    expect(toUserMessage(frozenError).title).toBe('Something went wrong');
+  });
+
+  it('imports and runs where browser globals throw on access (SSR)', async () => {
+    const names = ['window', 'document', 'localStorage', 'navigator'];
+    const saved = names.map((n) => Object.getOwnPropertyDescriptor(globalThis, n));
+    for (const n of names) {
+      Object.defineProperty(globalThis, n, {
+        configurable: true,
+        get() {
+          throw new Error(`${n} accessed`);
+        },
+      });
+    }
+    try {
+      vi.resetModules();
+      const fresh = await import('../../src/errors/index.js');
+      const err = fresh.errorFromResponse(429, '{"code":"RATE_LIMITED"}', { 'retry-after': '1' });
+      expect(err.code).toBe('RATE_LIMITED');
+      expect(fresh.toUserMessage(err).action).toBe('retry');
+      expect(fresh.isSdkError(fresh.wrap(new TypeError('Failed to fetch')))).toBe(true);
+      expect(fresh.is(err, RateLimitError)).toBe(true);
+    } finally {
+      for (const [i, n] of names.entries()) {
+        if (saved[i]) Object.defineProperty(globalThis, n, saved[i]);
+        else delete globalThis[n];
+      }
+    }
+    expect(typeof globalThis.window).toBe('undefined');
+  });
+});
+
+describe('wrap — undici transport messages', () => {
+  it("maps undici's `TypeError: terminated` (body dropped mid-read) to NetworkError", () => {
+    const e = wrap(new TypeError('terminated'));
+    expect(e).toBeInstanceOf(NetworkError);
+    expect(isRetryable(e)).toBe(true);
+  });
+});

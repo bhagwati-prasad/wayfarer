@@ -38,6 +38,15 @@ const DISCOVER = '6011000000000004';
 /** Shorthand: `[path, code]` pairs of a result or issue list. */
 const codes = (r) => (Array.isArray(r) ? r : r.issues).map((i) => [i.path, i.code]);
 
+/** Recursively freeze a plain value so that any write during validation throws. */
+function deepFreeze(v) {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) {
+    Object.freeze(v);
+    for (const k of Object.keys(v)) deepFreeze(v[k]);
+  }
+  return v;
+}
+
 /** Expect `fn` to throw a `ValidationError` whose first issue has `path` / `code`. */
 function expectThrows(fn, path, code) {
   let caught;
@@ -165,6 +174,13 @@ describe('module surface', () => {
   it('factories return fresh schema objects every call', () => {
     expect(schemas.card()).not.toBe(schemas.card());
     expect(schemas.searchParams()).not.toBe(schemas.searchParams());
+  });
+
+  it('is SSR-safe: this suite runs without a DOM and the module imported anyway', () => {
+    expect(typeof window).toBe('undefined');
+    expect(typeof document).toBe('undefined');
+    expect(typeof localStorage).toBe('undefined');
+    expect(typeof validate).toBe('function');
   });
 });
 
@@ -472,6 +488,72 @@ describe('validate', () => {
       expect(() => validate({ required: true, type: 'string', props: {} }, v)).not.toThrow();
     }
   });
+
+  it('still runs a parent custom when an array element failed (cross-field checks are never hidden)', () => {
+    const custom = vi.fn((list) => (list[1] === 'x' ? { path: '[1]', code: 'cross' } : true));
+    const r = validate({ items: { type: 'integer' }, custom }, [1, 'x']);
+    expect(codes(r)).toEqual([
+      ['[1]', 'type'],
+      ['[1]', 'cross'],
+    ]);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(custom.mock.calls[0][0]).toEqual([1, 'x']);
+    // the node's own checks still gate it, and so does a wrong container type
+    const gated = vi.fn(() => 'never');
+    expect(
+      codes(validate({ maxLength: 1, items: { type: 'integer' }, custom: gated }, [1, 2]))
+    ).toEqual([['', 'maxLength']]);
+    expect(codes(validate({ items: {}, custom: gated }, 'not-a-list'))).toEqual([['', 'type']]);
+    expect(codes(validate({ props: {}, custom: gated }, [1]))).toEqual([['', 'type']]);
+    expect(gated).not.toHaveBeenCalled();
+  });
+
+  it('accepts deeply frozen values, schemas and contexts (nothing is written to any of them)', () => {
+    const ctx = deepFreeze({ today: TODAY, travelDate: TRAVEL, path: 'travelers[0]' });
+    const traveler = deepFreeze(validTraveler());
+    const schema = deepFreeze(schemas.traveler(requirements(), 'ADT'));
+    expect(validate(schema, traveler, ctx)).toEqual({ valid: true, issues: [] });
+    expect(validate(deepFreeze(schemas.searchParams()), deepFreeze(validSearch()), ctx).valid).toBe(
+      true
+    );
+    expect(validate(deepFreeze(schemas.contact()), deepFreeze(validContact()), ctx).valid).toBe(
+      true
+    );
+    expect(
+      validate(
+        deepFreeze(schemas.card()),
+        deepFreeze({ number: VISA, expMonth: 1, expYear: 2030, cvc: '123' }),
+        deepFreeze({ now: new Date(2026, 9, 17).getTime() })
+      ).valid
+    ).toBe(true);
+    expect(ctx).toEqual({ today: TODAY, travelDate: TRAVEL, path: 'travelers[0]' });
+  });
+
+  it('reads prototype-looking keys as plain data and never pollutes Object.prototype', () => {
+    const hostile = JSON.parse(
+      '{"__proto__": {"a": 1, "polluted": true}, "constructor": {"b": 2}}'
+    );
+    const r = validate(
+      { props: { a: { required: true }, constructor: { type: 'string' } } },
+      hostile
+    );
+    expect(codes(r)).toEqual([
+      ['a', 'required'],
+      ['constructor', 'type'],
+    ]);
+    expect({}.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted')).toBe(false);
+    expect(Object.keys(issuesByPath(r))).toEqual(['a', 'constructor']);
+  });
+
+  it('treats years below 100 as real calendar years in date checks', () => {
+    expect(validate({ type: 'date' }, '0099-12-31').valid).toBe(true);
+    expect(validate({ type: 'date' }, '0096-02-29').valid).toBe(true);
+    expect(codes(validate({ type: 'date' }, '0099-02-29'))).toEqual([['', 'date']]);
+    expect(codes(validate({ type: 'date', min: '0100-01-01' }, '0099-12-31'))).toEqual([
+      ['', 'min'],
+    ]);
+  });
 });
 
 // ── validators ───────────────────────────────────────────────────────────────────────────────────
@@ -753,6 +835,15 @@ describe('isNameValid / namesFitTicket', () => {
     expect(namesFitTicket(undefined, 'Mehta')).toBe(false);
     expect(namesFitTicket('Arjun', 5)).toBe(false);
   });
+
+  it('lifts the length cap with Infinity instead of silently falling back to 60', () => {
+    expect(isNameValid('a'.repeat(70), { maxLength: Infinity })).toBe(true);
+    expect(isNameValid('a'.repeat(70), { maxLength: 80 })).toBe(true);
+    expect(isNameValid('a'.repeat(70), { maxLength: NaN })).toBe(false);
+    expect(isNameValid('a'.repeat(70), { maxLength: -1 })).toBe(false);
+    expect(namesFitTicket('a'.repeat(40), 'b'.repeat(40), Infinity)).toBe(true);
+    expect(namesFitTicket('a'.repeat(40), 'b'.repeat(40), -5)).toBe(false);
+  });
 });
 
 // ── domain checks ────────────────────────────────────────────────────────────────────────────────
@@ -962,6 +1053,27 @@ describe('paxCountsValid', () => {
     expect(codes(paxCountsValid([1, 2], rules))).toEqual([['', 'type']]);
     expect(codes(paxCountsValid(undefined))).toEqual([['', 'type']]);
   });
+
+  it('ignores negative rule values and rejects inconsistent age bands up front', () => {
+    expect(
+      paxCountsValid({ adults: 1, children: 1, childAges: [5] }, { infantMax: -1, childMax: -1 })
+    ).toEqual([]);
+    expect(paxCountsValid({ adults: 1, infants: 1 }, { infantPerAdult: -1 })).toEqual([]);
+    expect(paxCountsValid({ adults: 3 }, { maxPax: -1 })).toEqual([]);
+    const err = expectThrows(
+      () => paxCountsValid({ adults: 1 }, { infantMax: 13, childMax: 12 }),
+      'rules',
+      'invalid_rules'
+    );
+    expect(err.issues[0].params).toEqual({ infantMax: 13, childMax: 12 });
+    // equal bands are allowed: there is simply no child age
+    expect(
+      paxCountsValid(
+        { adults: 1, children: 1, childAges: [12] },
+        { infantMax: 12, childMax: 12 }
+      )[0].code
+    ).toBe('ageForType');
+  });
 });
 
 describe('travelerMatchesSlot', () => {
@@ -1049,6 +1161,23 @@ describe('travelerMatchesSlot', () => {
       'travelDate',
       'invalid_date'
     );
+  });
+
+  it('rejects inconsistent age bands with a ValidationError and ignores negative ones', () => {
+    expectThrows(
+      () =>
+        travelerMatchesSlot(
+          { dob: '1990-01-01' },
+          { type: 'ADT' },
+          { infantMax: 13, childMax: 12 },
+          TRAVEL
+        ),
+      'rules',
+      'invalid_rules'
+    );
+    expect(
+      travelerMatchesSlot({ dob: '2020-01-01' }, { type: 'CHD' }, { infantMax: -2 }, TRAVEL)
+    ).toEqual([]);
   });
 });
 
@@ -1590,6 +1719,46 @@ describe('schemas.searchParams', () => {
     delete noCabin.cabin;
     expect(validate(schema, noCabin, CTX).valid).toBe(true);
   });
+
+  it('reports date order even when another slice is malformed', () => {
+    const params = {
+      ...validSearch(),
+      tripType: 'multi_city',
+      slices: [
+        { origin: 'DELHI', destination: 'DXB', date: '2026-11-05' },
+        { origin: 'DXB', destination: 'LHR', date: '2026-11-04' },
+        { origin: 'LHR', destination: 'DEL', date: '2026-11-06' },
+      ],
+    };
+    expect(codes(validate(schemas.searchParams(), params, CTX))).toEqual([
+      ['slices[0].origin', 'iata'],
+      ['slices[1].date', 'dateOrder'],
+    ]);
+  });
+
+  it('does not alias the limits it was built from and rejects inconsistent age bands up front', () => {
+    const limits = { fareTypes: ['regular', 'student'], cabins: ['economy'], maxLegs: 2 };
+    const schema = schemas.searchParams(limits);
+    limits.fareTypes.push('vip');
+    limits.cabins.push('first');
+    limits.maxLegs = 1;
+    expect(
+      codes(validate(schema, { ...validSearch(), fareTypes: ['vip'], cabin: 'first' }, CTX))
+    ).toEqual([
+      ['cabin', 'enum'],
+      ['fareTypes[0]', 'enum'],
+    ]);
+    expect(validate(schema, validSearch(), CTX).valid).toBe(true);
+    expectThrows(() => schemas.searchParams({ infantMax: 13 }), 'rules', 'invalid_rules');
+    expectThrows(
+      () => schemas.searchParams({ ageRules: { infantMax: 5, childMax: 3 } }),
+      'rules',
+      'invalid_rules'
+    );
+    expect(
+      validate(schemas.searchParams({ infantMax: -1, childMax: -1 }), validSearch(), CTX).valid
+    ).toBe(true);
+  });
 });
 
 describe('schemas.traveler', () => {
@@ -1854,6 +2023,80 @@ describe('schemas.traveler', () => {
       ['phone', 'phone'],
     ]);
   });
+
+  it('accepts long names under a generous nameRules.maxLength (the name check honours the cap)', () => {
+    const generous = schemas.traveler(
+      { ...requirements(), nameRules: { maxLength: 80, charset: 'latin' } },
+      'ADT'
+    );
+    const t = { ...validTraveler(), firstName: 'a'.repeat(70), lastName: 'Mehta' };
+    expect(validate(generous, t, CTX)).toEqual({ valid: true, issues: [] });
+    expect(codes(validate(generous, { ...t, firstName: 'a'.repeat(81) }, CTX))).toEqual([
+      ['firstName', 'maxLength'],
+    ]);
+    expect(codes(validate(generous, { ...t, lastName: 'b'.repeat(10) }, CTX))).toEqual([
+      ['lastName', 'nameLength'],
+    ]);
+  });
+
+  it('rejects inconsistent backend age bands when the schema is built', () => {
+    expectThrows(
+      () => schemas.traveler({ ageRules: { infantMax: 13, childMax: 12 } }, 'ADT'),
+      'rules',
+      'invalid_rules'
+    );
+    expect(
+      validate(schemas.traveler({ ageRules: { infantMax: -3 } }, 'ADT'), validTraveler(), {
+        ...CTX,
+        travelDate: TRAVEL,
+      }).valid
+    ).toBe(true);
+  });
+
+  it('ignores FieldRules that address the prototype chain and applies paths through arrays', () => {
+    const req = requirements();
+    req.perType.ADT.fields = [
+      { path: '__proto__.polluted', required: true },
+      { path: 'constructor.prototype.polluted', required: true },
+      { path: 'prototype', required: true },
+      { path: 'loyalty.programme', required: true },
+      { path: 'documents[0].nationality', required: true, pattern: '^[A-Z]{2}$' },
+    ];
+    const schema = schemas.traveler(req, 'ADT');
+    expect(Object.getPrototypeOf(schema.props)).toBe(Object.prototype);
+    expect(Object.keys(schema.props)).not.toContain('constructor');
+    expect(Object.keys(schema.props)).not.toContain('prototype');
+    expect({}.polluted).toBeUndefined();
+    const base = validTraveler();
+    expect(codes(validate(schema, base, CTX))).toEqual([
+      ['documents[0].nationality', 'required'],
+      ['loyalty', 'required'],
+    ]);
+    const full = {
+      ...base,
+      documents: [{ ...base.documents[0], nationality: 'IN' }],
+      loyalty: [{ airline: 'AI', number: '12345678', programme: 'Flying Returns' }],
+    };
+    expect(validate(schema, full, CTX)).toEqual({ valid: true, issues: [] });
+    expect(
+      codes(
+        validate(
+          schema,
+          {
+            ...full,
+            documents: [{ ...base.documents[0], nationality: 'ind' }],
+            loyalty: [{ airline: 'AI', number: '12345678' }],
+          },
+          CTX
+        )
+      )
+    ).toEqual([
+      ['documents[0].nationality', 'pattern'],
+      ['loyalty[0].programme', 'required'],
+    ]);
+    // the requirements object itself is left untouched
+    expect(req.perType.ADT.fields).toHaveLength(5);
+  });
 });
 
 describe('schemas.contact', () => {
@@ -1932,6 +2175,23 @@ describe('schemas.contact', () => {
       )
     ).toEqual([]);
     expect(validate(strict, validContact(), CTX).valid).toBe(true);
+  });
+
+  it('accepts long emergency contact names up to the field cap', () => {
+    const long = {
+      ...validContact(),
+      emergency: { name: 'a'.repeat(100), phone: { countryCode: '+91', number: '9123456780' } },
+    };
+    expect(validate(schemas.contact(), long, CTX).valid).toBe(true);
+    expect(
+      codes(
+        validate(
+          schemas.contact(),
+          { ...long, emergency: { ...long.emergency, name: 'a'.repeat(121) } },
+          CTX
+        )
+      )
+    ).toEqual([['emergency.name', 'maxLength']]);
   });
 });
 

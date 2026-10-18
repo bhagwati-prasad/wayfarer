@@ -68,7 +68,7 @@ import { durationBetween, formatDuration } from './datetime.js';
 /** @type {Readonly<Record<string, string>>} */
 const EN = Object.freeze({
   'common.stops.count': '{count, plural, =0{Non-stop} one{# stop} other{# stops}}',
-  // docs/api/03-utils.md §3 renders a layover as `2h 10m in DXB`; the en bundle says "… layover in …".
+  // docs/api/03-utils.md §3 renders a layover as `2h 10m in DXB` (messages/en.js uses the same copy).
   'common.layover': '{duration} in {airport}',
   'common.operatedBy': 'Operated by {airline}',
   'common.paxCount.ADT': '{count, plural, one{# adult} other{# adults}}',
@@ -153,6 +153,19 @@ function invalid(fn, message, path, code, params) {
 /** @param {unknown} v @returns {v is Record<string, any>} */
 function isObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Own‑property check, so a lookup table never answers with inherited keys (`constructor`, `__proto__`).
+ * @param {object} o @param {string} k @returns {boolean}
+ */
+function hasOwn(o, k) {
+  return Object.prototype.hasOwnProperty.call(o, k);
+}
+
+/** A number that can be displayed: finite (no `NaN` / `Infinity`). @param {unknown} v @returns {v is number} */
+function isFiniteNumber(v) {
+  return typeof v === 'number' && Number.isFinite(v);
 }
 
 /** @param {unknown} v @returns {Record<string, any>} */
@@ -318,9 +331,32 @@ function toLayovers(fn, slice) {
             }
           );
         }
+        const arrivalPath = `slice.segments[${i - 1}].arrivalAt`;
+        const departurePath = `slice.segments[${i}].departureAt`;
+        let durationMinutes;
+        try {
+          durationMinutes = durationBetween(prev.arrivalAt, next.departureAt);
+        } catch (e) {
+          // datetime reports its own argument names (`a` / `b`); re‑address the issue to the segment.
+          if (!(e instanceof ValidationError)) throw e;
+          const onDeparture = e.issues.length > 0 && e.issues[0].path === 'b';
+          const path = onDeparture ? departurePath : arrivalPath;
+          throw invalid(fn, `Expected ${path} to be a date-time`, path, 'invalid_datetime', {
+            value: onDeparture ? next.departureAt : prev.arrivalAt,
+          });
+        }
+        if (durationMinutes < 0) {
+          throw invalid(
+            fn,
+            `Expected ${departurePath} to be after ${arrivalPath}`,
+            departurePath,
+            'invalid_duration',
+            { value: durationMinutes }
+          );
+        }
         derived.push({
           airport: prev.destination,
-          durationMinutes: durationBetween(prev.arrivalAt, next.departureAt),
+          durationMinutes,
           overnight: false,
           selfTransfer: false,
           airportChange: codeOf(prev.destination) !== codeOf(next.origin),
@@ -431,8 +467,9 @@ export function formatPlace(p, style = 'city_code') {
  * Render a route as a chain of codes: `DEL → BOM → DEL`. Accepts `Slice[]` (places), `SliceRequest[]`
  * (codes), anything carrying `slices` (`SearchParams`, an `Offer`) or `params.slices` (a search
  * session), or one slice‑like object. Consecutive slices that connect share the junction code; an
- * open jaw starts a new chain after a comma (`DEL → BOM, BLR → DEL`). `arrow` is placed between
- * places with a space on each side; `style` renders `Place` objects through `formatPlace`.
+ * open jaw starts a new chain after a comma (`DEL → BOM, BLR → DEL`). `arrow` (surrounding whitespace
+ * normalised) is placed between places with a space on each side — an empty `arrow` leaves a single
+ * space; `style` renders `Place` objects through `formatPlace`.
  * @param {RouteInput | SearchParams} input
  * @param {RouteOptions} [options]
  * @returns {string} `''` for an empty slice list
@@ -453,7 +490,8 @@ export function formatRoute(input, options = {}) {
     });
   }
   const slices = toSlices(fn, input);
-  const separator = ` ${arrow} `;
+  const glyph = arrow.trim();
+  const separator = glyph ? ` ${glyph} ` : ' ';
   /** @type {string[][]} */
   const chains = [];
   /** @type {string[]} */
@@ -511,7 +549,8 @@ export function formatStops(n, t) {
  * @param {Translator} [t]
  * @returns {string}
  * @throws {ValidationError} for a slice without layovers / segments, a layover without an airport or
- *   a finite non‑negative duration, or a `t` that is not a function
+ *   a finite non‑negative duration, segments whose `arrivalAt` / `departureAt` are missing, invalid
+ *   or out of order (issue path `slice.segments[i].…`), or a `t` that is not a function
  */
 export function formatLayovers(slice, t) {
   const fn = 'formatLayovers';
@@ -596,9 +635,11 @@ export function formatPaxSummary(pax, t) {
 /**
  * `AI 101`: marketing carrier code + flight number. A flight number that already carries the carrier
  * prefix (`AI101`, `AI 101`) is normalised; without a marketing carrier the number is returned alone.
+ * A numeric `flightNumber` (`101`) is accepted when it is a non‑negative integer.
  * @param {Segment} seg
  * @returns {string}
- * @throws {ValidationError} when `seg` is not an object or has no `flightNumber`
+ * @throws {ValidationError} when `seg` is not an object or `flightNumber` is missing, blank or not a
+ *   string / non‑negative integer
  */
 export function formatFlightNumber(seg) {
   const fn = 'formatFlightNumber';
@@ -606,12 +647,21 @@ export function formatFlightNumber(seg) {
     throw invalid(fn, 'Expected seg to be a Segment', 'seg', 'type', { expected: 'object' });
   }
   const raw = seg.flightNumber;
-  if (!(typeof raw === 'string' || typeof raw === 'number')) {
-    throw invalid(fn, 'Expected seg.flightNumber to be a string', 'seg.flightNumber', 'type', {
-      expected: 'string',
-    });
+  let number =
+    typeof raw === 'string'
+      ? raw.trim().toUpperCase()
+      : Number.isSafeInteger(raw) && /** @type {number} */ (raw) >= 0
+        ? String(raw)
+        : '';
+  if (!number) {
+    throw invalid(
+      fn,
+      'Expected seg.flightNumber to be a non-empty string',
+      'seg.flightNumber',
+      'type',
+      { expected: 'string' }
+    );
   }
-  let number = String(raw).trim().toUpperCase();
   const code = airlineCode(seg.marketingCarrier);
   if (!code) return number;
   if (number.startsWith(code)) number = number.slice(code.length).trim();
@@ -685,8 +735,8 @@ export function formatPaxType(pt, t) {
 
 /**
  * One baggage rule: `1 × 23 kg` (pieces and weight), `2 pieces`, `23 kg`, else `Included` /
- * `Not included` (`common.baggage.*`). A `BagRule[]` is joined with `, `; an empty list is
- * `Not included`.
+ * `Not included` (`common.baggage.*`). `quantity: 0` is `Not included` whatever the weight says. A
+ * `BagRule[]` is joined with `, `; an empty list is `Not included`.
  * @param {BagRule | BagRule[]} rule
  * @param {Translator} [t]
  * @returns {string}
@@ -742,6 +792,8 @@ function formatBagRule(fn, rule, t, path) {
       }
     );
   }
+  // Zero pieces means no allowance at all, even when a per‑piece weight is still quoted.
+  if (quantity === 0) return tr(t, 'common.baggage.notIncluded', {});
   const hasQuantity = Number.isInteger(quantity) && /** @type {number} */ (quantity) > 0;
   const hasWeight = typeof weightKg === 'number' && weightKg > 0;
   if (hasQuantity && hasWeight) {
@@ -749,7 +801,7 @@ function formatBagRule(fn, rule, t, path) {
   }
   if (hasQuantity) return tr(t, 'common.baggage.pieces', { count: quantity });
   if (hasWeight) return tr(t, 'common.baggage.weight', { kg: weightKg });
-  if (quantity === 0 || rule.included !== true) return tr(t, 'common.baggage.notIncluded', {});
+  if (rule.included !== true) return tr(t, 'common.baggage.notIncluded', {});
   return tr(t, 'common.baggage.included', {});
 }
 
@@ -837,7 +889,8 @@ export function maskEmail(e) {
  * `''`.
  * @param {Phone | string | null | undefined} p
  * @returns {string}
- * @throws {ValidationError} when `p` is neither a string nor a `Phone` object
+ * @throws {ValidationError} when `p` is neither a string nor a `Phone` object, or its `number` /
+ *   `countryCode` are neither strings nor numbers
  */
 export function maskPhone(p) {
   const fn = 'maskPhone';
@@ -863,12 +916,21 @@ export function maskPhone(p) {
       expected: 'string',
     });
   }
+  const countryCode = p.countryCode;
+  if (
+    countryCode !== undefined &&
+    countryCode !== null &&
+    typeof countryCode !== 'string' &&
+    typeof countryCode !== 'number'
+  ) {
+    throw invalid(fn, 'Expected p.countryCode to be a string', 'p.countryCode', 'type', {
+      expected: 'string',
+    });
+  }
   const digits = number === undefined || number === null ? '' : String(number).replace(/\D/g, '');
   if (!digits) return '';
   const cc =
-    typeof p.countryCode === 'string' || typeof p.countryCode === 'number'
-      ? String(p.countryCode).replace(/\D/g, '')
-      : '';
+    countryCode === undefined || countryCode === null ? '' : String(countryCode).replace(/\D/g, '');
   const masked = maskTail(digits.split(''), 4);
   return cc ? `+${cc} ${masked}` : masked;
 }
@@ -899,7 +961,12 @@ export function maskCard(last4, brand) {
   const digits =
     tail === undefined || tail === null ? '' : String(tail).replace(/\D/g, '').slice(-4);
   const key = clean(b).toLowerCase();
-  const label = key === '' || key === 'unknown' ? '' : CARD_BRANDS[key] || humanize(key);
+  const label =
+    key === '' || key === 'unknown'
+      ? ''
+      : hasOwn(CARD_BRANDS, key)
+        ? CARD_BRANDS[key]
+        : humanize(key);
   const masked = digits ? `${BULLET.repeat(4)} ${digits}` : BULLET.repeat(4);
   return label ? `${label} ${masked}` : masked;
 }
@@ -924,11 +991,11 @@ export function maskDocument(number) {
  * `ABC123`). `null` / `undefined` → `''`.
  * @param {string | number | null | undefined} ref
  * @returns {string}
- * @throws {ValidationError} when `ref` is not a string or number
+ * @throws {ValidationError} when `ref` is not a string or a finite number
  */
 export function formatReference(ref) {
   if (ref === undefined || ref === null) return '';
-  if (typeof ref !== 'string' && typeof ref !== 'number') {
+  if (typeof ref !== 'string' && !isFiniteNumber(ref)) {
     throw invalid('formatReference', 'Expected ref to be a string', 'ref', 'type', {
       expected: 'string',
     });
@@ -937,27 +1004,37 @@ export function formatReference(ref) {
 }
 
 /**
+ * One part of a seat label (`number`, `row`, `column`): a string or a finite number, whitespace
+ * removed and upper‑cased; `''` when absent (`undefined` / `null`).
+ * @param {string} fn @param {unknown} v @param {string} path @returns {string}
+ */
+function seatPart(fn, v, path) {
+  if (v === undefined || v === null) return '';
+  if (typeof v === 'string' || isFiniteNumber(v))
+    return String(v).replace(/\s+/g, '').toUpperCase();
+  throw invalid(fn, `Expected ${path} to be a string`, path, 'type', { expected: 'string' });
+}
+
+/**
  * Seat label `12A` from a `Seat` (`number`), a `{ row, column }` / `{ row, letter }` pair or a bare
- * string; whitespace removed, upper‑cased. `null` / `undefined` → `''`.
+ * string; whitespace removed, upper‑cased. `null` / `undefined` → `''`. Each part must be a string
+ * or a finite number — nested objects are never stringified.
  * @param {Seat | { row: number|string, column?: string, letter?: string } | string | number | null | undefined} seat
  * @returns {string}
- * @throws {ValidationError} when `seat` is of an unsupported shape
+ * @throws {ValidationError} when `seat` is of an unsupported shape, or its `number` / `row` /
+ *   `column` is neither a string nor a finite number (issue path names the field)
  */
 export function formatSeat(seat) {
   const fn = 'formatSeat';
   if (seat === undefined || seat === null) return '';
-  if (typeof seat === 'string' || typeof seat === 'number') {
-    return String(seat).replace(/\s+/g, '').toUpperCase();
-  }
+  if (typeof seat === 'string' || isFiniteNumber(seat)) return seatPart(fn, seat, 'seat');
   if (isObject(seat)) {
     const o = /** @type {Record<string, unknown>} */ (seat);
-    if (o.number !== undefined && o.number !== null) {
-      return formatSeat(/** @type {string | number} */ (o.number));
-    }
-    const column = o.column !== undefined ? o.column : o.letter;
-    if (o.row !== undefined && o.row !== null && column !== undefined && column !== null) {
-      return formatSeat(`${o.row}${column}`);
-    }
+    if (o.number !== undefined && o.number !== null) return seatPart(fn, o.number, 'seat.number');
+    const columnPath = o.column !== undefined ? 'seat.column' : 'seat.letter';
+    const row = seatPart(fn, o.row, 'seat.row');
+    const column = seatPart(fn, o.column !== undefined ? o.column : o.letter, columnPath);
+    if (row && column) return `${row}${column}`;
   }
   throw invalid(fn, 'Expected seat to be a Seat, { row, column } or a seat label', 'seat', 'type', {
     expected: 'Seat',

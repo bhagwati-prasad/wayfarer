@@ -8,7 +8,7 @@ These rules let many scripts be written independently and still compose. They ar
 - Named exports only; no default exports. One responsibility per script, named as in `docs/README.md §3`.
 - **Zero runtime dependencies** in `src/` (gateway adapters load their vendor script at runtime via `<script>`; nothing else).
 - Core (`core`, `http`, `auth`, `state`, `events`, `errors`, `storage`, `utils`, `modules`, `adapters`, `payments`) must be **SSR‑safe**: never touch `window`, `document`, `localStorage`, `navigator` at import time; feature‑detect at call time. `ui/*` may assume a DOM.
-- Prettier defaults with `singleQuote: true`, `printWidth: 100`; ESLint recommended. No `console.*` in `src/` (use `ctx.logger`). No `TODO`/`FIXME` left behind.
+- Prettier defaults with `singleQuote: true`, `printWidth: 100`; ESLint recommended. No `console.*` in `src/` (use `ctx.logger`; the one exception is the documented `consoleAdapter` in `utils/telemetry.js`, which resolves `globalThis.console` at call time). No `TODO`/`FIXME` left behind.
 - Never throw a plain `Error`: use the classes in `src/errors/index.js`.
 - Every file starts with a one‑paragraph header comment: what it does, what it must not do.
 

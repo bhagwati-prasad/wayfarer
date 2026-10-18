@@ -573,3 +573,366 @@ describe('chunk / range', () => {
     expect(() => range('3')).toThrow(ValidationError);
   });
 });
+
+describe('deepEqual — adversarial cases', () => {
+  it('matches Set members as a multiset instead of short-circuiting on identity', () => {
+    const shared = { v: 1 };
+    expect(deepEqual(new Set([shared, { v: 1 }]), new Set([shared, { v: 2 }]))).toBe(false);
+    expect(deepEqual(new Set([shared, { v: 1 }]), new Set([shared, { v: 1 }]))).toBe(true);
+    expect(deepEqual(new Set([{ v: 1 }, { v: 1 }]), new Set([{ v: 1 }, { v: 2 }]))).toBe(false);
+    expect(deepEqual(new Set([{ v: 1 }, { v: 2 }]), new Set([{ v: 2 }, { v: 1 }]))).toBe(true);
+    expect(deepEqual(new Set([1, 'a', NaN]), new Set([NaN, 'a', 1]))).toBe(true);
+  });
+
+  it('does not let a failed Set candidate comparison leak into later ones', () => {
+    const X = { z: 1 };
+    const Y = { z: 2 };
+    const X2 = { z: 1 };
+    const a = new Set([
+      { r: X, k: 1 },
+      { r: X, k: 2 },
+    ]);
+    const b = new Set([
+      { r: Y, k: 2 },
+      { r: X2, k: 1 },
+    ]);
+    expect(deepEqual(a, b)).toBe(false);
+    const c = new Set([
+      { r: X2, k: 2 },
+      { r: { z: 1 }, k: 1 },
+    ]);
+    expect(deepEqual(a, c)).toBe(true);
+  });
+
+  it('compares Map entries structurally on key and value', () => {
+    expect(deepEqual(new Map([[{ k: 1 }, 'a']]), new Map([[{ k: 1 }, 'a']]))).toBe(true);
+    expect(deepEqual(new Map([[{ k: 1 }, 'a']]), new Map([[{ k: 2 }, 'a']]))).toBe(false);
+    expect(deepEqual(new Map([[{ k: 1 }, 'a']]), new Map([[{ k: 1 }, 'b']]))).toBe(false);
+    const k1 = { id: 1 };
+    const k2 = { id: 1 };
+    const swapped = new Map([
+      [k1, 2],
+      [k2, 1],
+    ]);
+    const base = new Map([
+      [k1, 1],
+      [k2, 2],
+    ]);
+    expect(deepEqual(base, swapped)).toBe(true);
+    expect(
+      deepEqual(
+        base,
+        new Map([
+          [k1, 1],
+          [k2, 3],
+        ])
+      )
+    ).toBe(false);
+    expect(
+      deepEqual(
+        new Map([['a', 1]]),
+        new Map([
+          ['a', 1],
+          ['b', 2],
+        ])
+      )
+    ).toBe(false);
+  });
+
+  it('terminates on mutually cyclic inputs with different cycle lengths', () => {
+    const a = { v: 1 };
+    a.self = a;
+    const b = { v: 1 };
+    const b2 = { v: 1, self: b };
+    b.self = b2;
+    expect(deepEqual(a, b)).toBe(true);
+    const c = { v: 1 };
+    const c2 = { v: 2, self: c };
+    c.self = c2;
+    expect(deepEqual(a, c)).toBe(false);
+    const arr = [1];
+    arr.push(arr);
+    const arr2 = [1];
+    arr2.push([1, arr2]);
+    expect(deepEqual(arr, arr2)).toBe(true);
+  });
+
+  it('compares DataViews and ArrayBuffers by bytes and typed arrays by element', () => {
+    const dv = (...bytes) => new DataView(new Uint8Array(bytes).buffer);
+    expect(deepEqual(dv(1, 2), dv(1, 2))).toBe(true);
+    expect(deepEqual(dv(1, 2), dv(1, 3))).toBe(false);
+    expect(deepEqual(dv(1), dv(1, 2))).toBe(false);
+    expect(deepEqual(new Uint8Array([1]).buffer, new Uint8Array([2]).buffer)).toBe(false);
+    expect(deepEqual(new Float64Array([NaN, 0]), new Float64Array([NaN, -0]))).toBe(true);
+    expect(deepEqual(new Uint8Array([1]), new Int8Array([1]))).toBe(false);
+    expect(deepEqual(new Uint8Array([1, 2]).subarray(1), new Uint8Array([2]))).toBe(true);
+  });
+
+  it('compares boxed primitives by value and Errors by name, message and own keys', () => {
+    expect(deepEqual(new Number(1), new Number(1))).toBe(true);
+    expect(deepEqual(new Number(1), new Number(2))).toBe(false);
+    expect(deepEqual(new String('a'), new String('b'))).toBe(false);
+    expect(deepEqual(new Boolean(true), new Boolean(true))).toBe(true);
+    expect(deepEqual(Object(1n), Object(1n))).toBe(true);
+    expect(deepEqual(Object(1n), Object(2n))).toBe(false);
+    expect(deepEqual(new Number(1), 1)).toBe(false);
+    expect(deepEqual(new Error('a'), new Error('a'))).toBe(true);
+    expect(deepEqual(new Error('a'), new Error('b'))).toBe(false);
+    expect(deepEqual(new TypeError('a'), new RangeError('a'))).toBe(false);
+    const withCode = Object.assign(new Error('a'), { code: 1 });
+    expect(deepEqual(withCode, Object.assign(new Error('a'), { code: 2 }))).toBe(false);
+    expect(deepEqual(withCode, Object.assign(new Error('a'), { code: 1 }))).toBe(true);
+  });
+
+  it('handles shared substructure without being fooled by it', () => {
+    const shared = { z: 1 };
+    expect(deepEqual({ a: shared, b: shared }, { a: { z: 1 }, b: { z: 1 } })).toBe(true);
+    expect(deepEqual({ a: shared, b: shared }, { a: { z: 1 }, b: { z: 2 } })).toBe(false);
+    expect(deepEqual({ a: shared, b: shared }, { a: shared, b: { z: 2 } })).toBe(false);
+  });
+});
+
+describe('shallowEqual — non-plain objects', () => {
+  it('compares anything but arrays and plain objects by identity only', () => {
+    const d = new Date(1);
+    expect(shallowEqual(d, d)).toBe(true);
+    expect(shallowEqual(new Date(1), new Date(1))).toBe(false);
+    expect(shallowEqual(new Map(), new Map())).toBe(false);
+    class Foo {
+      constructor() {
+        this.a = 1;
+      }
+    }
+    expect(shallowEqual(new Foo(), new Foo())).toBe(false);
+    expect(shallowEqual(new Foo(), { a: 1 })).toBe(false);
+    expect(shallowEqual({ a: 1 }, new Foo())).toBe(false);
+    const np = Object.assign(Object.create(null), { a: 1 });
+    expect(shallowEqual(np, { a: 1 })).toBe(true);
+    expect(shallowEqual([], {})).toBe(false);
+  });
+});
+
+describe('path parsing', () => {
+  it('keeps dots and brackets inside quoted segments and honours escapes', () => {
+    const o = { a: { 'x.y': 1, 'x]y': 2, "q'z": 3, 'with"quote': 4 } };
+    expect(get(o, 'a["x.y"]')).toBe(1);
+    expect(get(o, "a['x]y']")).toBe(2);
+    expect(get(o, 'a["q\'z"]')).toBe(3);
+    expect(get(o, "a['with\"quote']")).toBe(4);
+    expect(get(o, 'a["with\\"quote"]')).toBe(4);
+    expect(set({}, 'a["x.y"]', 1)).toEqual({ a: { 'x.y': 1 } });
+    expect(set({}, 'a["x.y"].z', 1)).toEqual({ a: { 'x.y': { z: 1 } } });
+  });
+
+  it('treats an unclosed [ as an ordinary character and drops empty unquoted segments', () => {
+    expect(get({ 'a[b': 1 }, 'a[b')).toBe(1);
+    expect(get({ a: { 'b[c': 1 } }, 'a.b[c')).toBe(1);
+    expect(get({ a: { b: 1 } }, 'a..b')).toBe(1);
+    expect(get({ a: { b: 1 } }, 'a[].b')).toBe(1);
+    expect(get({ a: [{ b: 1 }] }, '[a][0][b]')).toBe(1);
+    expect(get({ a: [{ b: 1 }] }, 'a[0]b')).toBe(1);
+    expect(get({ '': 1 }, '[""]')).toBe(1);
+    expect(get({ a: 1 }, ['a'])).toBe(1);
+    expect(get({ 1: 'one' }, 1)).toBe('one');
+  });
+
+  it('still refuses unsafe segments written in bracket or quoted form', () => {
+    for (const bad of ['a[__proto__]', 'a["__proto__"]', "a['constructor'].x", '["prototype"]']) {
+      expect(() => set({}, bad, 1)).toThrow(ValidationError);
+    }
+    expect(get({}, 'a["__proto__"]', 'dflt')).toBe('dflt');
+    expect(get({ a: {} }, 'a["__proto__"].x', 'dflt')).toBe('dflt');
+  });
+});
+
+describe('set — copies', () => {
+  it('keeps a null prototype, never freezes copies and preserves an own __proto__ key', () => {
+    const np = Object.assign(Object.create(null), { a: { b: 1 } });
+    const out = set(np, 'a.c', 2);
+    expect(Object.getPrototypeOf(out)).toBeNull();
+    expect(out.a).toEqual({ b: 1, c: 2 });
+    expect(np.a).toEqual({ b: 1 });
+    const frozen = deepFreeze({ a: { b: 1 }, list: [1] });
+    const thawed = set(frozen, 'a.b', 2);
+    expect(Object.isFrozen(thawed)).toBe(false);
+    expect(Object.isFrozen(thawed.a)).toBe(false);
+    expect(thawed.a.b).toBe(2);
+    expect(thawed.list).toBe(frozen.list);
+    const weird = JSON.parse('{"__proto__":{"polluted":true},"a":1}');
+    const res = set(weird, 'b', 2);
+    expect(Object.hasOwn(res, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(res)).toBe(Object.prototype);
+    expect(res.b).toBe(2);
+    expect({}.polluted).toBeUndefined();
+  });
+
+  it('replaces non-container values on the path instead of mutating them', () => {
+    const d = new Date(0);
+    const o = { when: d };
+    const out = set(o, 'when.iso', 'x');
+    expect(out.when).toEqual({ iso: 'x' });
+    expect(o.when).toBe(d);
+    expect(d.iso).toBeUndefined();
+  });
+});
+
+describe('clone — binary data and regexps', () => {
+  it('copies ArrayBuffers, DataViews and RegExp lastIndex', () => {
+    const buf = new Uint8Array([1, 2, 3]).buffer;
+    const c = clone({ buf });
+    expect(c.buf).not.toBe(buf);
+    expect(new Uint8Array(c.buf)).toEqual(new Uint8Array([1, 2, 3]));
+    const dv = new DataView(buf, 1, 2);
+    const dvc = clone(dv);
+    expect(dvc).not.toBe(dv);
+    expect(dvc.byteLength).toBe(2);
+    expect(dvc.getUint8(0)).toBe(2);
+    expect(dvc.buffer).not.toBe(buf);
+    const re = /a/g;
+    re.lastIndex = 3;
+    const rc = clone(re);
+    expect(rc).not.toBe(re);
+    expect(rc.lastIndex).toBe(3);
+    expect(rc.flags).toBe('g');
+  });
+
+  it('never returns frozen copies of frozen input', () => {
+    const frozen = deepFreeze({ a: [1, { b: 2 }] });
+    const c = clone(frozen);
+    expect(Object.isFrozen(c)).toBe(false);
+    expect(Object.isFrozen(c.a)).toBe(false);
+    expect(Object.isFrozen(c.a[1])).toBe(false);
+    expect(c).toEqual(frozen);
+  });
+});
+
+describe('stableStringify — JSON.stringify parity', () => {
+  it('calls toJSON once with the key and unwraps boxed primitives', () => {
+    expect(
+      stableStringify({
+        toJSON() {
+          return this;
+        },
+      })
+    ).toBe('{}');
+    expect(stableStringify({ d: { toJSON: (k) => `key=${k}` } })).toBe('{"d":"key=d"}');
+    expect(stableStringify([{ toJSON: (k) => `key=${k}` }])).toBe('["key=0"]');
+    expect(stableStringify({ toJSON: (k) => `key=${k}` })).toBe('"key="');
+    expect(stableStringify(new Number(3))).toBe('3');
+    expect(stableStringify({ s: new String('x'), b: new Boolean(false) })).toBe(
+      '{"b":false,"s":"x"}'
+    );
+    const o = {
+      toJSON() {
+        return { b: 2, a: 1 };
+      },
+    };
+    expect(stableStringify(o)).toBe(JSON.stringify({ a: 1, b: 2 }));
+    expect(stableStringify({ n: new Number(NaN) })).toBe('{"n":null}');
+  });
+
+  it('reports the path of the first cycle it meets', () => {
+    const inner = { x: 1 };
+    const o = { list: [inner] };
+    inner.back = o;
+    let err;
+    try {
+      stableStringify(o);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ code: 'circular', path: '$.list[0].back' });
+  });
+});
+
+describe('hash — known answers', () => {
+  it('matches the canonical cyrb53 (seed 0) reference values', () => {
+    expect(hash('')).toBe((3338908027751811).toString(36));
+    expect(hash('a')).toBe((7929297801672961).toString(36));
+    expect(hash('hello world')).toBe((3259054761512980).toString(36));
+    expect(hash('hello world')).toBe('w38l36pd04');
+    expect(hash({ a: 1 })).toBe((4561562304108614).toString(36));
+  });
+
+  it('propagates ValidationError for cyclic non-string input', () => {
+    const o = {};
+    o.self = o;
+    expect(() => hash(o)).toThrow(ValidationError);
+  });
+});
+
+describe('range — bounds', () => {
+  it('rejects non-integer, unsafe and huge ranges with ValidationError', () => {
+    for (const [a, b, path] of [
+      [0.5, 3, 'a'],
+      [0, 2.5, 'b'],
+      [2 ** 53, 2 ** 53 + 4, 'a'],
+      [0, -0.5, 'b'],
+      [1.5, undefined, 'a'],
+      ['3', undefined, 'a'],
+    ]) {
+      let err;
+      try {
+        range(a, b);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.issues[0]).toMatchObject({ path, code: 'invalid' });
+    }
+    let err;
+    try {
+      range(0, 2 ** 32);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ path: 'b', code: 'max' });
+    expect(() => range(-(2 ** 32), 0)).toThrow(ValidationError);
+  });
+
+  it('counts down through negatives and handles single-step ranges', () => {
+    expect(range(-1, -4)).toEqual([-1, -2, -3]);
+    expect(range(1, 2)).toEqual([1]);
+    expect(range(2, 1)).toEqual([2]);
+    expect(range(-3)).toEqual([0, -1, -2]);
+  });
+});
+
+describe('deepMerge — ownership', () => {
+  it('ignores inherited keys on the accumulator and never aliases source containers', () => {
+    const src = { toString: { a: 1 }, hasOwnProperty: { b: 2 } };
+    const out = deepMerge(src);
+    expect(out.toString).toEqual({ a: 1 });
+    expect(out.hasOwnProperty).toEqual({ b: 2 });
+    expect(out.toString).not.toBe(src.toString);
+    expect(Object.prototype.toString).toBe({}.toString);
+    const a = { cfg: { list: [{ id: 1 }] } };
+    const merged = deepMerge(a, { cfg: { list: [{ id: 2 }] } });
+    expect(merged.cfg.list).toEqual([{ id: 2 }]);
+    expect(a.cfg.list).toEqual([{ id: 1 }]);
+  });
+});
+
+describe('deepMerge — cyclic sources', () => {
+  it('terminates on a cyclic plain object and mirrors the cycle without aliasing the source', () => {
+    const src = { a: { n: 1 } };
+    src.a.self = src.a;
+    src.root = src;
+    const out = deepMerge({}, src);
+    expect(out.a.n).toBe(1);
+    expect(out.a.self).toBe(out.a);
+    expect(out.root).toBe(out);
+    expect(out.a).not.toBe(src.a);
+  });
+
+  it('still merges later sources over a cyclic earlier one', () => {
+    const cyclic = { a: { n: 1 } };
+    cyclic.a.back = cyclic;
+    const out = deepMerge(cyclic, { a: { m: 2 } });
+    expect(out.a.n).toBe(1);
+    expect(out.a.m).toBe(2);
+    expect(out.a.back).toBe(out);
+  });
+});

@@ -369,6 +369,54 @@ describe('parseMoney()', () => {
     expect(input).toEqual({ amount: '1,234.50', currency: 'inr' });
     expect(out).not.toBe(input);
   });
+
+  it('reads a trailing minus as the sign, but not the Indian "/-" no-paise marker', () => {
+    const o = { currency: 'INR' };
+    expect(parseMoney('1,234.50-', o)).toEqual({ amount: '-1234.50', currency: 'INR' });
+    expect(parseMoney('500-', o)).toEqual({ amount: '-500.00', currency: 'INR' });
+    expect(parseMoney('INR 500-')).toEqual({ amount: '-500.00', currency: 'INR' });
+    expect(parseMoney('500- INR')).toEqual({ amount: '-500.00', currency: 'INR' });
+    expect(parseMoney('1,234.50 ₹-', o)).toEqual({ amount: '-1234.50', currency: 'INR' });
+    expect(parseMoney('5+', o)).toEqual({ amount: '5.00', currency: 'INR' });
+    expect(parseMoney('Rs. 500/-', o)).toEqual({ amount: '500.00', currency: 'INR' });
+    expect(parseMoney('₹1,234/-', o)).toEqual({ amount: '1234.00', currency: 'INR' });
+    expect(parseMoney('500/- only', o)).toEqual({ amount: '500.00', currency: 'INR' });
+    expectValidation(() => parseMoney('-5-', o), 'invalid_format', 'input');
+    expectValidation(() => parseMoney('5--', o), 'invalid_format', 'input');
+    expectValidation(() => parseMoney('+5-', o), 'invalid_format', 'input');
+  });
+
+  it('rejects two different ISO codes in one string instead of keeping the first', () => {
+    expectValidation(() => parseMoney('USD 100 INR'), 'currency_mismatch', 'input.currency');
+    expectValidation(
+      () => parseMoney('USD 100 INR', { currency: 'INR' }),
+      'currency_mismatch',
+      'input.currency'
+    );
+    expectValidation(
+      () => parseMoney({ amount: 'USD 100 INR', currency: 'USD' }),
+      'currency_mismatch',
+      'input.amount.currency'
+    );
+    expect(parseMoney('INR 100 INR')).toEqual({ amount: '100.00', currency: 'INR' });
+  });
+
+  it('validates space and apostrophe grouping exactly like comma grouping', () => {
+    const o = { currency: 'INR' };
+    expect(parseMoney('EUR 1 234 567.89')).toEqual({ amount: '1234567.89', currency: 'EUR' });
+    expect(parseMoney('EUR 1\u00a0234\u202f567.5')).toEqual({
+      amount: '1234567.50',
+      currency: 'EUR',
+    });
+    expect(parseMoney('INR 12 34 567')).toEqual({ amount: '1234567.00', currency: 'INR' });
+    expect(parseMoney("CHF 1'234'567")).toEqual({ amount: '1234567.00', currency: 'CHF' });
+    expect(parseMoney('CHF 1\u2019234.50')).toEqual({ amount: '1234.50', currency: 'CHF' });
+    expect(parseMoney('1  234', o)).toEqual({ amount: '1234.00', currency: 'INR' });
+    expectValidation(() => parseMoney('12 34', o), 'invalid_format', 'input');
+    expectValidation(() => parseMoney('123 45', o), 'invalid_format', 'input');
+    expectValidation(() => parseMoney("1'50", o), 'invalid_format', 'input');
+    expectValidation(() => parseMoney('1 234,50', o), 'invalid_format', 'input');
+  });
 });
 
 describe('toMinor() / fromMinor()', () => {
@@ -674,6 +722,22 @@ describe('allocate()', () => {
     expectValidation(() => allocate(INR('1'), 'x'), 'invalid_type', 'ratios');
     expectValidation(() => allocate(null, [1]), 'invalid_type', 'money');
   });
+
+  it('handles very long ratio lists (no call-stack RangeError) and still conserves', () => {
+    const n = 300_000;
+    const parts = allocate(INR('1000.00'), new Array(n).fill(1));
+    expect(parts).toHaveLength(n);
+    let total = 0n;
+    for (const p of parts) total += toMinor(p);
+    expect(total).toBe(100_000n);
+    // 100 000 paise over 300 000 equal shares: the first 100 000 (lowest index) get one paisa each
+    expect(parts[0]).toEqual({ amount: '0.01', currency: 'INR' });
+    expect(parts[99_999]).toEqual({ amount: '0.01', currency: 'INR' });
+    expect(parts[100_000]).toEqual({ amount: '0.00', currency: 'INR' });
+    expect(parts[n - 1]).toEqual({ amount: '0.00', currency: 'INR' });
+    const fractional = allocate(USD('1.00'), new Array(n).fill(0.5));
+    expect(fractional.reduce((acc, p) => acc + toMinor(p), 0n)).toBe(100n);
+  });
 });
 
 describe('convert()', () => {
@@ -790,6 +854,64 @@ describe('convert()', () => {
     expectValidation(() => convert(USD('1'), 'INR', { INR: 83 }, { round: 1.5 }), 'invalid_enum');
     expectValidation(() => convert(USD('1'), 'INR', { INR: 83 }, { round: 'x' }), 'invalid_enum');
     expectValidation(() => convert('1', 'INR', { INR: 83 }), 'invalid_type', 'money');
+  });
+
+  it('treats an unlisted currency as unknown once the table lists its base at rate 1', () => {
+    const rates = { USD: 1, INR: 83.25 };
+    // previously EUR silently counted as the base and 100 EUR became 8325.00 INR
+    expectValidation(() => convert(money('100', 'EUR'), 'INR', rates), 'rate_missing', 'rates');
+    expectValidation(() => convert(INR('100'), 'EUR', rates), 'rate_missing', 'rates');
+    expectValidation(() => convert(USD('1'), 'INR', { USD: 1 }), 'rate_missing', 'rates');
+    expectValidation(
+      () => convert(money('100', 'EUR'), 'INR', { USD: '1.00', INR: '83.25' }),
+      'rate_missing',
+      'rates'
+    );
+    expectValidation(
+      () => convert(money('100', 'EUR'), 'INR', { USD: 1n, INR: 83.25 }),
+      'rate_missing',
+      'rates'
+    );
+    // listed currencies still convert, and the base may still be omitted entirely
+    expect(convert(USD('100.00'), 'INR', rates)).toEqual({ amount: '8325.00', currency: 'INR' });
+    expect(convert(INR('8325.00'), 'USD', rates)).toEqual({ amount: '100.00', currency: 'USD' });
+    expect(convert(USD('100.00'), 'INR', { INR: 83.25, EUR: 0.92 })).toEqual({
+      amount: '8325.00',
+      currency: 'INR',
+    });
+    // a pair key or a nested entry at 1 is a rate, not an explicit base
+    expect(convert(USD('100.00'), 'INR', { INR: 83.25, EUR_CHF: 1 })).toEqual({
+      amount: '8325.00',
+      currency: 'INR',
+    });
+    expect(convert(USD('2.00'), 'INR', { USD: { INR: 83.25 }, GBP: 1 })).toEqual({
+      amount: '166.50',
+      currency: 'INR',
+    });
+  });
+
+  it('reads only own properties of the rates table and accepts null prototypes', () => {
+    const bare = Object.assign(Object.create(null), { INR: 80 });
+    expect(convert(USD('1.00'), 'INR', bare)).toEqual({ amount: '80.00', currency: 'INR' });
+    const nestedBare = Object.assign(Object.create(null), {
+      USD: Object.assign(Object.create(null), { INR: 80 }),
+    });
+    expect(convert(USD('1.00'), 'INR', nestedBare)).toEqual({ amount: '80.00', currency: 'INR' });
+    expectValidation(
+      () => convert(USD('1.00'), 'INR', Object.create({ INR: 80 })),
+      'rate_missing',
+      'rates'
+    );
+    expectValidation(
+      () => convert(USD('1.00'), 'INR', Object.create({ USD_INR: 80 })),
+      'rate_missing',
+      'rates'
+    );
+    expectValidation(
+      () => convert(USD('1.00'), 'INR', { USD: Object.create({ INR: 80 }) }),
+      'rate_missing',
+      'rates'
+    );
   });
 });
 
@@ -991,6 +1113,36 @@ describe('formatMoney() with Intl', () => {
     );
   });
 
+  it('pre-rounds to the displayed digits and never shows a negative zero', () => {
+    const Real = RealIntl.NumberFormat;
+    const passed = [];
+    vi.stubGlobal('Intl', {
+      NumberFormat: class extends Real {
+        format(v) {
+          passed.push(v);
+          return super.format(v);
+        }
+      },
+    });
+    // Intl alone renders "-$0" here (it keeps the sign of a negative zero after rounding)
+    expect(formatMoney(USD('-0.40'), { locale: 'en-US', fraction: 0 })).toBe('$0');
+    expect(formatMoney(USD('-0.40'), { locale: 'en-US', fraction: 0, signDisplay: 'always' })).toBe(
+      '+$0'
+    );
+    expect(
+      formatMoney(USD('-0.40'), { locale: 'en-US', fraction: 0, signDisplay: 'exceptZero' })
+    ).toBe('$0');
+    expect(formatMoney(USD('-2.50'), { locale: 'en-US', fraction: 0 })).toBe('-$3');
+    expect(formatMoney(USD('2.50'), { locale: 'en-US', fraction: 0 })).toBe('$3');
+    expect(plain(formatMoney(money('-0.005', 'BHD'), { locale: 'en-US', fraction: 2 }))).toBe(
+      '-BHD 0.01'
+    );
+    expect(formatMoney(money('1234', 'JPY'), { locale: 'en-US', fraction: 2 })).toBe('¥1,234.00');
+    // Intl only ever sees the already-rounded decimal string, so its rounding mode cannot matter
+    expect(passed).toEqual(['0', '0', '0', '-3', '3', '-0.01', '1234.00']);
+    for (const s of passed) expect(typeof s).toBe('string');
+  });
+
   it('does not throw for a currency Intl does not know', () => {
     const s = formatMoney(money('1234.56', 'XTS'), { locale: 'en-US' });
     expect(s).toContain('1,234.56');
@@ -1102,6 +1254,10 @@ describe('formatMoney() fallback (no usable Intl)', () => {
     expect(formatMoney(INR('-1'), { signDisplay: 'negative' })).toBe('-₹1.00');
     expect(formatMoney(INR('1'), { signDisplay: 'negative' })).toBe('₹1.00');
     expect(formatMoney(INR('-0.004'), { fraction: 2 })).toBe('₹0.00');
+    expect(formatMoney(INR('-0.40'), { fraction: 0 })).toBe('₹0');
+    expect(formatMoney(INR('-0.40'), { fraction: 0, signDisplay: 'always' })).toBe('+₹0');
+    expect(formatMoney(INR('-0.40'), { fraction: 0, signDisplay: 'exceptZero' })).toBe('₹0');
+    expect(formatMoney(INR('-2.50'), { fraction: 0 })).toBe('-₹3');
   });
 
   it('falls back when Intl.NumberFormat rejects the currency', () => {

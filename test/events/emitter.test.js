@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import vm from 'node:vm';
 import { createEmitter } from '../../src/events/emitter.js';
 import {
   AbortError,
@@ -26,6 +27,14 @@ function fakeLogger() {
 }
 
 const tick = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
+
+/** Drain the microtask queue (promise reactions only; no timers involved). */
+async function flushMicrotasks() {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+}
+
+/** Longest delay a single setTimeout honours; larger values overflow and fire immediately. */
+const MAX_DELAY = 2 ** 31 - 1;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -146,6 +155,81 @@ describe('emit', () => {
     e.on('*', b);
     e.emit('x', { v: 1 });
     expect(a.mock.calls[0][0]).toBe(b.mock.calls[0][0]);
+  });
+
+  it('never mutates the caller payload: listeners get a fresh envelope object', () => {
+    const e = createEmitter({ now: () => 1 });
+    const payload = Object.freeze({ id: 'p1', type: 'forged' });
+    const delivered = [];
+    e.on('x', (p) => {
+      delivered.push(p);
+      p.id = 'changed'; // a listener mutating its copy must not reach the caller
+    });
+    expect(() => e.emit('x', payload)).not.toThrow();
+    expect(delivered[0]).not.toBe(payload);
+    expect(delivered[0].id).toBe('changed');
+    expect(payload).toEqual({ id: 'p1', type: 'forged' });
+  });
+
+  it('spreads plain objects from another realm instead of boxing them as data', () => {
+    const e = createEmitter({ now: () => 1 });
+    const fn = vi.fn();
+    e.on('x', fn);
+    const foreign = vm.runInNewContext('({ sessionId: "s9" })');
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    e.emit('x', foreign);
+    expect(fn).toHaveBeenLastCalledWith({ type: 'x', at: 1, sessionId: 's9' });
+    const bare = Object.assign(Object.create(null), { k: 1 });
+    e.emit('x', bare);
+    expect(fn).toHaveBeenLastCalledWith({ type: 'x', at: 1, k: 1 });
+    const foreignArray = vm.runInNewContext('[1, 2]');
+    e.emit('x', foreignArray);
+    expect(fn).toHaveBeenLastCalledWith({ type: 'x', at: 1, data: foreignArray });
+  });
+
+  it('does not pollute Object.prototype through a payload with an own __proto__ key', () => {
+    const e = createEmitter({ now: () => 1 });
+    const fn = vi.fn();
+    e.on('x', fn);
+    e.emit('x', JSON.parse('{"__proto__":{"polluted":true},"ok":1}'));
+    expect({}.polluted).toBeUndefined();
+    const delivered = fn.mock.calls[0][0];
+    expect(Object.getPrototypeOf(delivered)).toBe(Object.prototype);
+    expect(delivered.ok).toBe(1);
+    expect(delivered.polluted).toBeUndefined();
+  });
+
+  it('treats __proto__ / constructor as ordinary event names', () => {
+    const e = createEmitter();
+    const fn = vi.fn();
+    e.on('__proto__', fn);
+    e.emit('constructor');
+    e.emit('toString');
+    expect(fn).not.toHaveBeenCalled();
+    expect(e.listenerCount('constructor')).toBe(0);
+    e.emit('__proto__', { v: 1 });
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect({}.v).toBeUndefined();
+    e.off('__proto__');
+    expect(e.listenerCount()).toBe(0);
+  });
+
+  it('never writes to the console (the injected logger is the only sink)', () => {
+    const spies = ['error', 'warn', 'log', 'info', 'debug'].map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {})
+    );
+    const e = createEmitter();
+    e.on('error', () => {
+      throw new Error('error listener');
+    });
+    e.on('x', () => {
+      throw new Error('x listener');
+    });
+    e.emit('x');
+    e.emit('error', new Error('explicit'));
+    e.clear();
+    e.emit('error', new Error('nobody listens'));
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
   it('returns undefined and never throws because of listeners', () => {
@@ -570,6 +654,78 @@ describe('listener exceptions', () => {
     });
     expect(() => e.emit('x')).not.toThrow();
   });
+
+  it("route a rejected promise returned by a listener to 'error' instead of leaving it unhandled", async () => {
+    const e = createEmitter({ now: () => 4 });
+    const onError = vi.fn();
+    const after = vi.fn();
+    e.on('error', onError);
+    e.on('x', async () => {
+      throw new RangeError('async boom');
+    });
+    e.on('x', after);
+    expect(e.emit('x', { id: 1 })).toBeUndefined();
+    expect(after).toHaveBeenCalledTimes(1); // fan-out is still synchronous and complete
+    expect(onError).not.toHaveBeenCalled(); // the rejection has not settled yet
+    await flushMicrotasks();
+    expect(onError).toHaveBeenCalledTimes(1);
+    const payload = onError.mock.calls[0][0];
+    expect(payload).toMatchObject({ type: 'error', at: 4, event: 'x' });
+    expect(payload.error).toBeInstanceOf(SdkError);
+    expect(payload.error.cause).toBeInstanceOf(RangeError);
+    expect(payload.error.message).toBe('async boom');
+  });
+
+  it('route a rejected promise from a once listener and from a thenable whose then() throws', async () => {
+    const e = createEmitter();
+    const onError = vi.fn();
+    e.on('error', onError);
+    const onceFn = vi.fn(() => Promise.reject(new Error('once async')));
+    e.once('x', onceFn);
+    e.on('y', () => ({
+      then() {
+        throw new Error('bad thenable');
+      },
+    }));
+    e.emit('x');
+    e.emit('x');
+    e.emit('y');
+    expect(onceFn).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1); // the thenable failed synchronously
+    expect(onError.mock.calls[0][0]).toMatchObject({ event: 'y' });
+    expect(onError.mock.calls[0][0].error.message).toBe('bad thenable');
+    await flushMicrotasks();
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[1][0]).toMatchObject({ event: 'x' });
+    expect(onError.mock.calls[1][0].error.message).toBe('once async');
+  });
+
+  it("log and drop a rejected promise returned by an 'error' listener (no recursion)", async () => {
+    const logger = fakeLogger();
+    const e = createEmitter({ logger });
+    const errorListener = vi.fn(async () => {
+      throw new Error('async error listener');
+    });
+    e.on('error', errorListener);
+    e.emit('error', { error: new SdkError('original'), event: 'z' });
+    await flushMicrotasks();
+    expect(errorListener).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [msg, data] = logger.error.mock.calls[0];
+    expect(msg).toMatch(/dropped/);
+    expect(data.event).toBe('z');
+    expect(data.error.message).toBe('async error listener');
+  });
+
+  it('ignore a resolved promise returned by a listener', async () => {
+    const e = createEmitter();
+    const onError = vi.fn();
+    e.on('error', onError);
+    e.on('x', async () => 'fine');
+    e.emit('x');
+    await flushMicrotasks();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
 
 // ── waitFor ──────────────────────────────────────────────────────────────────────────────────────
@@ -669,6 +825,124 @@ describe('waitFor', () => {
     await expect(p).resolves.toMatchObject({ ok: true });
     expect(vi.getTimerCount()).toBe(0);
     await tick(1000); // nothing left to fire
+  });
+
+  it('honours a timeout longer than the 2^31-1 ms setTimeout limit instead of firing at once', async () => {
+    const e = createEmitter();
+    const timeoutMs = MAX_DELAY + 5000;
+    const p = e.waitFor('x', { timeoutMs });
+    const assertion = expect(p).rejects.toMatchObject({ name: 'TimeoutError', timeoutMs });
+    await tick(1000); // an overflowing setTimeout would already have fired here
+    expect(e.listenerCount('x')).toBe(1);
+    await tick(MAX_DELAY - 1000); // first chained slice elapsed, the remainder is re-armed
+    expect(e.listenerCount('x')).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await tick(4999);
+    expect(e.listenerCount('x')).toBe(1);
+    await tick(1);
+    await assertion;
+    expect(e.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    const check = e.waitFor('y', { timeoutMs }).catch((caught) => caught);
+    await tick(timeoutMs);
+    const err = await check;
+    expect(err).toBeInstanceOf(TimeoutError);
+    expect(err.message).toContain(`${timeoutMs} ms`);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('still resolves on the event (and clears the chained timer) during a long timeout', async () => {
+    const e = createEmitter();
+    const p = e.waitFor('x', { timeoutMs: 2 ** 32 });
+    await tick(MAX_DELAY); // past the first slice, second slice armed
+    expect(vi.getTimerCount()).toBe(1);
+    e.emit('x', { ok: true });
+    await expect(p).resolves.toMatchObject({ ok: true });
+    expect(vi.getTimerCount()).toBe(0);
+    const q = e.waitFor('y', { timeoutMs: 2 ** 32 });
+    await tick(MAX_DELAY);
+    e.clear();
+    await expect(q).rejects.toMatchObject({ name: 'AbortError', reason: 'cleared' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('is not detached by off(event): only settlement, its signal or clear() release the wait', async () => {
+    const e = createEmitter();
+    const fn = vi.fn();
+    e.on('x', fn);
+    e.on('x', fn);
+    const p = e.waitFor('x', { timeoutMs: 1000 });
+    const q = e.waitFor(['x', 'ns:*']);
+    e.off('x');
+    e.off(['x', 'ns:*']);
+    e.off('x', fn);
+    expect(e.listenerCount('x')).toBe(2); // the two waits survive the sweep
+    expect(vi.getTimerCount()).toBe(1);
+    e.emit('x', { ok: true });
+    expect(fn).not.toHaveBeenCalled();
+    await expect(p).resolves.toMatchObject({ ok: true });
+    await expect(q).resolves.toMatchObject({ ok: true });
+    expect(e.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('lets an abort raised from inside the emit win when it comes before the match', async () => {
+    const e = createEmitter();
+    const controller = new AbortController();
+    e.on('x', () => controller.abort('mid-emit')); // registered ahead of the wait
+    const p = e.waitFor('x', { timeoutMs: 100 });
+    const q = e.waitFor('x', { signal: controller.signal });
+    e.emit('x', { ok: true });
+    await expect(p).resolves.toMatchObject({ ok: true }); // not tied to the signal
+    await expect(q).rejects.toMatchObject({ name: 'AbortError', reason: 'mid-emit' });
+    expect(e.listenerCount()).toBe(1); // only the aborting listener remains
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('removes its abort hook once settled by the timeout', async () => {
+    const e = createEmitter();
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+    const p = e.waitFor('x', { timeoutMs: 10, signal: controller.signal });
+    const assertion = expect(p).rejects.toBeInstanceOf(TimeoutError);
+    await tick(10);
+    await assertion;
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    controller.abort(); // settled: nothing to do, nothing thrown
+    await expect(p).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it('leaks nothing when a duck-typed signal throws on addEventListener', async () => {
+    const e = createEmitter();
+    const signal = {
+      aborted: false,
+      addEventListener() {
+        throw new Error('no hooks here');
+      },
+      removeEventListener() {},
+    };
+    const err = await e.waitFor('x', { timeoutMs: 100, signal }).catch((caught) => caught);
+    expect(err).toBeInstanceOf(SdkError);
+    expect(err.message).toBe('no hooks here');
+    expect(e.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    e.clear(); // no orphaned waiter to cancel
+  });
+
+  it('settles even when a duck-typed signal throws on removeEventListener', async () => {
+    const e = createEmitter();
+    const signal = {
+      aborted: false,
+      addEventListener: vi.fn(),
+      removeEventListener() {
+        throw new Error('cannot detach');
+      },
+    };
+    const p = e.waitFor('x', { timeoutMs: 100, signal });
+    e.emit('x', { ok: true });
+    await expect(p).resolves.toMatchObject({ ok: true });
+    expect(e.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('treats timeoutMs: Infinity / undefined / null as "no timeout" and 0 as immediate', async () => {
@@ -844,5 +1118,47 @@ describe('clear', () => {
     e.on('x', fn);
     e.emit('x');
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── module hygiene ───────────────────────────────────────────────────────────────────────────────
+
+describe('module', () => {
+  it('is SSR-safe: importing and using it touches no browser global', async () => {
+    const names = ['window', 'document', 'localStorage', 'sessionStorage', 'navigator'];
+    const touched = [];
+    const originals = new Map();
+    for (const name of names) {
+      const desc = Object.getOwnPropertyDescriptor(globalThis, name);
+      if (desc && !desc.configurable) continue;
+      originals.set(name, desc);
+      Object.defineProperty(globalThis, name, {
+        configurable: true,
+        get() {
+          touched.push(name);
+          return undefined;
+        },
+      });
+    }
+    try {
+      vi.resetModules();
+      const fresh = await import('../../src/events/emitter.js');
+      const e = fresh.createEmitter();
+      const fn = vi.fn();
+      e.on(['x', 'ns:*', '*'], fn);
+      e.emit('x', { a: 1 });
+      const p = e.waitFor('y', { timeoutMs: 10 });
+      const assertion = expect(p).rejects.toMatchObject({ name: 'TimeoutError' });
+      await tick(10);
+      await assertion;
+      e.clear();
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const [name, desc] of originals) {
+        if (desc) Object.defineProperty(globalThis, name, desc);
+        else delete globalThis[name];
+      }
+    }
+    expect(touched).toEqual([]);
   });
 });

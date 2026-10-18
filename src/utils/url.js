@@ -7,8 +7,11 @@
  * function here. Everything is pure and SSR‑safe: `window` is read by `currentUrlParams` /
  * `sameOrigin` at call time only, never at import time; no I/O, no timers, no module‑level mutable
  * state, no logging. Decoders never throw on malformed input — they return `null` (or keep the raw
- * value for an undecodable percent‑escape); `encodeSearchParams` / `encodeState` throw only
- * `ValidationError` with `issues[]`. Query parsing never writes prototype‑pollution keys.
+ * value for an undecodable percent‑escape); encoders (`buildQuery` / `withParams` on a value that
+ * is not JSON‑serialisable, `encodeSearchParams`, `encodeState`) throw only `ValidationError` with
+ * `issues[]`, never a bare `URIError` / `TypeError` (lone surrogates are replaced, not thrown on).
+ * Neither query parsing nor `decodeState` ever writes a prototype‑pollution key (`__proto__`,
+ * `constructor`, `prototype`).
  *
  * Deep‑link format: `ORIG-DEST/YYYY-MM-DD` (one‑way), `ORIG-DEST/out/back` (round trip) or legs
  * joined with `+` (multi‑city), followed by a query of `a c i is y s` (passenger counts),
@@ -30,7 +33,7 @@ import { ValidationError } from '../errors/index.js';
 /**
  * @typedef {Object} BuildQueryOptions
  * @property {'repeat'|'comma'|'bracket'} [arrayFormat] how arrays are serialised: `k=a&k=b`
- *   (default), `k=a,b` or `k[]=a&k[]=b`
+ *   (default), `k=a,b` or `k[]=a&k[]=b`; an unknown value falls back to `repeat`
  * @property {boolean} [skipNull] drop `null` values (default `true`); when `false` a `null` becomes
  *   `k=`. `undefined` is always dropped.
  */
@@ -68,6 +71,8 @@ const FARE_TYPES = new Set([
 const IATA_RE = /^[A-Za-z]{3}$/;
 const CURRENCY_RE = /^[A-Za-z]{3}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ROUTE_RE = /^([A-Za-z]{3})-([A-Za-z]{3})$/;
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const INT_RE = /^\d+$/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const BASE64URL_RE = /^[A-Za-z0-9_-]*$/;
@@ -75,12 +80,48 @@ const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 
 // ── small helpers ───────────────────────────────────────────────────────────────────────────────
 
-/** `encodeURIComponent` that also encodes `!'()*` so output is RFC 3986 strict. */
+/**
+ * Replace every lone surrogate with U+FFFD so `encodeURIComponent` cannot throw `URIError`
+ * (`String.prototype.toWellFormed` needs Node 20 / recent browsers, so it is done by hand).
+ * @param {string} s
+ * @returns {string}
+ */
+function toWellFormed(s) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        out += s[i] + s[i + 1];
+        i++;
+      } else {
+        out += '\uFFFD';
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      out += '\uFFFD';
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+/**
+ * `encodeURIComponent` that also encodes `!'()*` (RFC 3986 strict) and never throws: a lone
+ * surrogate becomes U+FFFD (`%EF%BF%BD`) instead of raising `URIError`.
+ * @param {unknown} value
+ * @returns {string}
+ */
 function enc(value) {
-  return encodeURIComponent(String(value)).replace(
-    /[!'()*]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
-  );
+  const s = String(value);
+  let encoded;
+  try {
+    encoded = encodeURIComponent(s);
+  } catch {
+    encoded = encodeURIComponent(toWellFormed(s));
+  }
+  return encoded.replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /** Decode one query component (`+` → space); keeps the raw text when the escape is malformed. */
@@ -93,11 +134,29 @@ function decodeComponent(s) {
   }
 }
 
-/** Serialise one scalar for a query value. */
-function scalar(v) {
+/**
+ * Serialise one query value: `null` / `undefined` → `''`, `Date` → ISO (or `''` when invalid),
+ * any other object → JSON (`''` when its `toJSON` yields nothing), the rest → `String(v)`.
+ * @param {unknown} v
+ * @param {string} key the query key, used as the issue path when `v` cannot be serialised
+ * @returns {string}
+ * @throws {ValidationError} when an object value is not JSON‑serialisable (cycle, BigInt)
+ */
+function scalar(v, key) {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? '' : v.toISOString();
-  if (typeof v === 'object') return JSON.stringify(v);
+  if (typeof v === 'object') {
+    let json;
+    try {
+      json = JSON.stringify(v);
+    } catch (cause) {
+      throw new ValidationError(`Query value "${key}" is not JSON-serialisable`, {
+        cause,
+        issues: [{ path: key, code: 'invalid', message: 'value is not JSON-serialisable' }],
+      });
+    }
+    return json === undefined ? '' : json;
+  }
   return String(v);
 }
 
@@ -126,13 +185,14 @@ function isValidDateStr(s) {
   const month = Number(m[2]);
   const day = Number(m[3]);
   if (month < 1 || month > 12 || day < 1) return false;
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return day <= daysInMonth;
+  // Pure arithmetic: `Date.UTC` would map years 0–99 onto 1900–1999.
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return day <= DAYS_IN_MONTH[month - 1] + (month === 2 && leap ? 1 : 0);
 }
 
-/** `true` for a non‑negative safe integer. */
+/** `true` for a non‑negative safe integer (larger values would not survive `String()` → parse). */
 function isCount(n) {
-  return typeof n === 'number' && Number.isInteger(n) && n >= 0;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 }
 
 /** Infer the trip type from a list of normalised slices. */
@@ -153,9 +213,11 @@ function csv(value) {
   return items.length && items.every(Boolean) ? items : null;
 }
 
-/** Parse a non‑negative integer query value; `null` when malformed. */
+/** Parse a non‑negative safe‑integer query value; `null` when malformed or too large. */
 function parseCount(value) {
-  return INT_RE.test(value) ? Number(value) : null;
+  if (!INT_RE.test(value)) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 /** Parse a `1`/`0` flag query value; `undefined` when absent, `null` when malformed. */
@@ -166,8 +228,14 @@ function parseFlag(value) {
   return null;
 }
 
-/** Origin of a URL for `sameOrigin`: a string, `RELATIVE`, or `null` when unparsable. */
+/** Marker returned by `originOf` for a relative URL when no browser is present to resolve it. */
 const RELATIVE = Symbol('relative');
+
+/**
+ * Origin of a URL for `sameOrigin`: a string, `RELATIVE`, or `null` when unparsable.
+ * @param {unknown} u
+ * @returns {string|typeof RELATIVE|null}
+ */
 function originOf(u) {
   const s = String(u ?? '').trim();
   const href =
@@ -201,10 +269,15 @@ function utf8Encode(str) {
   return Uint8Array.from(out);
 }
 
-/** UTF‑8 decode bytes; throws (caught by the caller) when the byte sequence is malformed. */
+/**
+ * UTF‑8 decode bytes; throws (caught by the caller) when the byte sequence is malformed. A leading
+ * BOM is kept (`ignoreBOM`) so the native and fallback paths agree: it is not valid JSON.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
 function utf8Decode(bytes) {
   if (typeof TextDecoder === 'function') {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   }
   let escaped = '';
   for (const b of bytes) escaped += `%${b.toString(16).padStart(2, '0')}`;
@@ -260,17 +333,21 @@ function base64UrlToBytes(str) {
 // ── query strings ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * Serialise an object into a query string (no leading `?`). Values are percent‑encoded; `Date`s
- * become ISO strings, plain objects JSON; `undefined` is dropped, `null` is dropped unless
- * `skipNull: false`; empty arrays emit nothing. Effects: none.
+ * Serialise an object into a query string (no leading `?`). Values are percent‑encoded (RFC 3986
+ * strict; a lone surrogate is written as U+FFFD rather than thrown on); `Date`s become ISO
+ * strings, plain objects JSON; `undefined` is dropped, `null` is dropped unless `skipNull: false`;
+ * empty arrays emit nothing. Never mutates `obj`. Effects: none.
  * @param {Record<string, unknown>|null|undefined} obj
- * @param {BuildQueryOptions} [options]
+ * @param {BuildQueryOptions|null} [options]
  * @returns {string}
+ * @throws {ValidationError} with `issues[0].path` = the key, when a value is an object that is
+ *   not JSON‑serialisable (cycle, BigInt)
  */
 export function buildQuery(obj, options = {}) {
   if (!obj || typeof obj !== 'object') return '';
-  const arrayFormat = options.arrayFormat || 'repeat';
-  const skipNull = options.skipNull !== false;
+  const o = options && typeof options === 'object' ? options : {};
+  const arrayFormat = o.arrayFormat || 'repeat';
+  const skipNull = o.skipNull !== false;
   const parts = [];
   for (const [key, raw] of Object.entries(obj)) {
     if (raw === undefined) continue;
@@ -279,7 +356,9 @@ export function buildQuery(obj, options = {}) {
       continue;
     }
     if (Array.isArray(raw)) {
-      const values = raw.filter((v) => v !== undefined && (v !== null || !skipNull)).map(scalar);
+      const values = raw
+        .filter((v) => v !== undefined && (v !== null || !skipNull))
+        .map((v) => scalar(v, key));
       if (!values.length) continue;
       if (arrayFormat === 'comma') parts.push(`${enc(key)}=${values.map(enc).join(',')}`);
       else if (arrayFormat === 'bracket')
@@ -287,16 +366,18 @@ export function buildQuery(obj, options = {}) {
       else values.forEach((v) => parts.push(`${enc(key)}=${enc(v)}`));
       continue;
     }
-    parts.push(`${enc(key)}=${enc(scalar(raw))}`);
+    parts.push(`${enc(key)}=${enc(scalar(raw, key))}`);
   }
   return parts.join('&');
 }
 
 /**
  * Parse a query string into an object of strings. Accepts a bare query, one with a leading `?`,
- * or a URL / path (the part between `?` and `#` is used; the fragment is always dropped). `+` is a
- * space; repeated keys and `k[]` keys become arrays; a key without `=` gets `''`; a malformed
- * percent‑escape keeps its raw text; `__proto__`‑like keys are skipped. Effects: none.
+ * or a URL / path (the part between `?` and `#` is used; the fragment is always dropped, and an
+ * absolute URL or `/path` without `?` yields `{}` — so a bare query must not start with a
+ * scheme‑like `key:`). `+` is a space; repeated keys and `k[]` keys become arrays; a key without
+ * `=` gets `''`; a malformed percent‑escape keeps its raw text; `__proto__`‑like keys are skipped.
+ * Effects: none.
  * @param {string|null|undefined} str
  * @returns {Record<string, string|string[]>}
  */
@@ -337,7 +418,9 @@ export function parseQuery(str) {
 /**
  * Join a base URL and a path with exactly one `/` between them. An absolute `path` is returned
  * as is; a `path` starting with `?` or `#` is appended without a slash; an empty `path` returns
- * `base` unchanged. Effects: none.
+ * `base` unchanged. A query / fragment carried by `base` stays behind the joined path (both
+ * queries are concatenated, the path's fragment wins): `joinUrl('/v1?x=1', 'a')` is `/v1/a?x=1`,
+ * never `/v1?x=1/a`. Effects: none.
  * @param {string} base
  * @param {string} path
  * @returns {string}
@@ -348,8 +431,12 @@ export function joinUrl(base, path) {
   if (!p) return b;
   if (isAbsoluteUrl(p)) return p;
   if (!b) return p;
-  if (p.startsWith('?') || p.startsWith('#')) return b.replace(/\/+$/, '') + p;
-  return `${b.replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+  const [bPath, bQuery, bHash] = splitUrl(b);
+  const [pPath, pQuery, pHash] = splitUrl(p);
+  const stem = bPath.replace(/\/+$/, '');
+  const joined = !pPath ? stem : bPath ? `${stem}/${pPath.replace(/^\/+/, '')}` : pPath;
+  const query = [bQuery, pQuery].filter(Boolean).join('&');
+  return `${joined}${query ? `?${query}` : ''}${pHash || bHash}`;
 }
 
 /**
@@ -359,6 +446,7 @@ export function joinUrl(base, path) {
  * @param {string} url
  * @param {Record<string, unknown>|null|undefined} params
  * @returns {string}
+ * @throws {ValidationError} as `buildQuery`, when a value is not JSON‑serialisable
  */
 export function withParams(url, params) {
   const base = String(url ?? '');
@@ -460,10 +548,12 @@ function countOf(pax, field, issues) {
  * Query keys: `a c i is y s` (counts; `a` and `cabin` always present, zero optional counts
  * dropped), `cabin` (`Y|W|C|F`), `ft`, `direct=1`, `stops`, `near=1`, `mode` (`ps|c`), `cur`,
  * `ages`. False flags and fields outside this list (`flexDays`, `timeWindow`, `airlines`, …) are
- * not part of the format. `decodeSearchParams` round‑trips the result. Effects: none.
+ * not part of the format. Never mutates `p`. `decodeSearchParams` round‑trips the result.
+ * Effects: none.
  * @param {SearchParams} p
  * @returns {string}
- * @throws {ValidationError} with `issues[]` naming every invalid field
+ * @throws {ValidationError} with `issues[]` naming every invalid field (codes, dates, counts —
+ *   which must be non‑negative safe integers —, enums, flags that are not booleans)
  */
 export function encodeSearchParams(p) {
   if (!p || typeof p !== 'object') {
@@ -553,6 +643,12 @@ export function encodeSearchParams(p) {
       issues.push({ path: 'currency', code: 'invalid', message: 'currency must be ISO-4217' });
     }
   }
+  for (const flag of /** @type {const} */ (['directOnly', 'includeNearby'])) {
+    const v = p[flag];
+    if (v !== undefined && v !== null && typeof v !== 'boolean') {
+      issues.push({ path: flag, code: 'invalid', message: `${flag} must be a boolean` });
+    }
+  }
 
   if (issues.length) throw new ValidationError('Invalid search params', { issues });
 
@@ -570,9 +666,9 @@ export function encodeSearchParams(p) {
   if (seniors) query.s = seniors;
   query.cabin = CABIN_TO_CODE[cabin];
   if (fareTypes && fareTypes.length) query.ft = fareTypes;
-  if (p.directOnly) query.direct = 1;
+  if (p.directOnly === true) query.direct = 1;
   if (typeof p.maxStops === 'number') query.stops = p.maxStops;
-  if (p.includeNearby) query.near = 1;
+  if (p.includeNearby === true) query.near = 1;
   if (p.resultMode) query.mode = MODE_TO_CODE[p.resultMode];
   if (currency) query.cur = currency;
   if (childAges && childAges.length) query.ages = childAges;
@@ -582,33 +678,32 @@ export function encodeSearchParams(p) {
 }
 
 /**
- * Decode a deep link produced by `encodeSearchParams` back into `SearchParams`. Tolerates a
- * leading / trailing `/`, lowercase codes, a fragment and unknown query keys (ignored). Defaults
- * when absent: `a=1`, `c=0`, `i=0`, `cabin=Y`; an absent `mode` leaves `resultMode` unset, which
- * the search module resolves to the default `per_slice` (split). Any malformed part — bad code or
- * date, wrong segment count, unknown enum value, non‑integer count, duplicated key — yields
- * `null`; nothing is thrown. Effects: none.
- * @param {string} str
- * @returns {SearchParams|null}
+ * Parse the path of a deep link: `ORIG-DEST/date`, `ORIG-DEST/out/back` or `leg+leg…`. Leading
+ * segments that are neither a route nor a date token are a URL / mount prefix and are skipped
+ * (`https://app.ota.com/flights/DEL-BOM/…`); a date token before the first route, or anything
+ * malformed after it, yields `null` rather than a partial decode.
+ * @param {string} path percent‑decoded, without query or fragment
+ * @returns {{ tripType: TripType, slices: SliceRequest[] }|null}
  */
-export function decodeSearchParams(str) {
-  if (typeof str !== 'string') return null;
-  const [rawPath, rawQuery] = splitUrl(str.trim());
-  let path;
-  try {
-    path = decodeURIComponent(rawPath).replace(/^\/+|\/+$/g, '');
-  } catch {
-    return null;
+function parseDeepLinkPath(path) {
+  const segments = path.replace(/^\/+|\/+$/g, '').split('/');
+  let start = 0;
+  while (
+    start < segments.length &&
+    !ROUTE_RE.test(segments[start]) &&
+    !DATE_RE.test(segments[start])
+  ) {
+    start++;
   }
-  if (!path) return null;
+  if (start === segments.length || !ROUTE_RE.test(segments[start])) return null;
 
-  const legs = path.split('+');
+  const legs = segments.slice(start).join('/').split('+');
   /** @type {SliceRequest[]} */
   const slices = [];
   /** @type {TripType} */
   let tripType;
   const readLeg = (leg) => {
-    const m = /^([A-Za-z]{3})-([A-Za-z]{3})$/.exec(leg);
+    const m = ROUTE_RE.exec(leg);
     return m ? { origin: m[1].toUpperCase(), destination: m[2].toUpperCase() } : null;
   };
   if (legs.length === 1) {
@@ -633,6 +728,33 @@ export function decodeSearchParams(str) {
       slices.push({ ...route, date: segs[1] });
     }
   }
+  return { tripType, slices };
+}
+
+/**
+ * Decode a deep link produced by `encodeSearchParams` back into `SearchParams`. Tolerates a
+ * leading / trailing `/`, a URL or path prefix before the first route token (as `search.fromUrl`
+ * receives: `https://app.ota.com/flights/DEL-BOM/2026-11-02?a=2`), lowercase codes, a fragment
+ * and unknown query keys (ignored). Defaults when absent: `a=1`, `c=0`, `i=0`, `cabin=Y`; an
+ * absent `mode` leaves `resultMode` unset, which the search module resolves to the default
+ * `per_slice` (split). Any malformed part — bad code or date, wrong segment count, unknown enum
+ * value, non‑integer or unsafe‑integer count, duplicated key — yields `null`; nothing is thrown.
+ * Effects: none.
+ * @param {string} str
+ * @returns {SearchParams|null}
+ */
+export function decodeSearchParams(str) {
+  if (typeof str !== 'string') return null;
+  const [rawPath, rawQuery] = splitUrl(str.trim());
+  let path;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    return null;
+  }
+  const parsed = parseDeepLinkPath(path);
+  if (!parsed) return null;
+  const { tripType, slices } = parsed;
 
   const q = parseQuery(rawQuery);
   /** @type {Record<string, string>} */
@@ -657,8 +779,9 @@ export function decodeSearchParams(str) {
   if (seniors !== undefined) passengers.seniors = seniors;
   if (query.ages !== undefined) {
     const ages = csv(query.ages);
-    if (!ages || !ages.every((a) => INT_RE.test(a))) return null;
-    passengers.childAges = ages.map(Number);
+    const parsedAges = ages ? ages.map(parseCount) : null;
+    if (!parsedAges || parsedAges.includes(null)) return null;
+    passengers.childAges = /** @type {number[]} */ (parsedAges);
   }
 
   const cabinCode = query.cabin === undefined ? 'Y' : query.cabin.toUpperCase();
@@ -683,8 +806,9 @@ export function decodeSearchParams(str) {
   if (near === null) return null;
   if (near !== undefined) out.includeNearby = near;
   if (query.mode !== undefined) {
-    if (!hasOwn(CODE_TO_MODE, query.mode)) return null;
-    out.resultMode = CODE_TO_MODE[query.mode];
+    const modeCode = query.mode.toLowerCase();
+    if (!hasOwn(CODE_TO_MODE, modeCode)) return null;
+    out.resultMode = CODE_TO_MODE[modeCode];
   }
   if (query.cur !== undefined) {
     if (!CURRENCY_RE.test(query.cur)) return null;
@@ -696,33 +820,57 @@ export function decodeSearchParams(str) {
 // ── redirect state ──────────────────────────────────────────────────────────────────────────────
 
 /**
- * Serialise a JSON‑serialisable value as unpadded base64url (URL‑ and cookie‑safe), UTF‑8 encoded
- * so any unicode survives. Effects: none.
+ * Build the `ValidationError` thrown by `encodeState`.
+ * @param {string} what e.g. `is not JSON-serialisable`
+ * @param {unknown} [cause]
+ * @returns {ValidationError}
+ */
+function stateError(what, cause) {
+  return new ValidationError(`State ${what}`, {
+    cause,
+    issues: [{ path: '', code: 'invalid', message: `state ${what}` }],
+  });
+}
+
+/**
+ * Serialise a JSON object or array as unpadded base64url (URL‑ and cookie‑safe), UTF‑8 encoded
+ * so any unicode survives. Only values whose JSON is an object / array are accepted, because
+ * that is all `decodeState` returns: a primitive, `null`, or an object whose `toJSON` yields a
+ * primitive (`Date`) would encode fine and then decode to `null`. Effects: none.
  * @param {unknown} obj
  * @returns {string}
  * @throws {ValidationError} when the value is not JSON‑serialisable (cycles, `undefined`, BigInt)
+ *   or does not serialise to a JSON object / array
  */
 export function encodeState(obj) {
   let json;
   try {
     json = JSON.stringify(obj);
   } catch (cause) {
-    throw new ValidationError('State is not JSON-serialisable', {
-      cause,
-      issues: [{ path: '', code: 'invalid', message: 'state is not JSON-serialisable' }],
-    });
+    throw stateError('is not JSON-serialisable', cause);
   }
-  if (typeof json !== 'string') {
-    throw new ValidationError('State is not JSON-serialisable', {
-      issues: [{ path: '', code: 'invalid', message: 'state is not JSON-serialisable' }],
-    });
-  }
+  if (typeof json !== 'string') throw stateError('is not JSON-serialisable');
+  if (json[0] !== '{' && json[0] !== '[') throw stateError('must be a JSON object or array');
   return bytesToBase64Url(utf8Encode(json));
 }
 
 /**
- * Inverse of `encodeState`; also accepts standard base64 (padded or `+/`). Returns `null` for
- * anything that is not valid base64 of valid UTF‑8 JSON, instead of throwing. Effects: none.
+ * `JSON.parse` reviver that drops prototype‑pollution keys at any depth (the state comes from a
+ * URL, so it is attacker‑controlled; an own `__proto__` key would re‑parent whatever it is later
+ * `Object.assign`ed or deep‑merged into).
+ * @param {string} key
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function dropUnsafeKeys(key, value) {
+  return UNSAFE_KEYS.has(key) ? undefined : value;
+}
+
+/**
+ * Inverse of `encodeState`; also accepts standard base64 (padded or `+/`) and surrounding
+ * whitespace. Returns `null` for anything that is not valid base64 of valid UTF‑8 JSON whose top
+ * level is an object / array, instead of throwing; `__proto__` / `constructor` / `prototype` keys
+ * are removed at every depth. Effects: none.
  * @param {string} str
  * @returns {Record<string, unknown>|unknown[]|null}
  */
@@ -731,7 +879,7 @@ export function decodeState(str) {
   const bytes = base64UrlToBytes(str);
   if (!bytes || !bytes.length) return null;
   try {
-    const value = JSON.parse(utf8Decode(bytes));
+    const value = JSON.parse(utf8Decode(bytes), dropUnsafeKeys);
     return value !== null && typeof value === 'object' ? value : null;
   } catch {
     return null;
@@ -741,17 +889,31 @@ export function decodeState(str) {
 // ── browser ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Query carried by a fragment: what follows its first `?` (`#/callback?code=…`, hash routers),
+ * else the whole fragment when it is itself a query (`#access_token=…&state=…`, OAuth implicit
+ * flows), else `''` (`#section-2`).
+ * @param {string} hash with or without the leading `#`
+ * @returns {string}
+ */
+function fragmentQuery(hash) {
+  const frag = hash.replace(/^#/, '');
+  const q = frag.indexOf('?');
+  if (q !== -1) return frag.slice(q + 1);
+  return frag.includes('=') ? frag.replace(/^\/+/, '') : '';
+}
+
+/**
  * Query parameters of the current page, read from `window.location` at call time (never at
  * import). Parameters carried in the fragment (`#code=…`, `#/callback?code=…`, as OAuth and some
- * payment redirects do) are merged in, with query‑string values winning on conflict. Returns `{}`
- * outside a browser. Effects: none.
+ * payment redirects do) are merged in, with query‑string values winning on conflict; a hash‑router
+ * path before the fragment's `?` is never read as parameters. Returns `{}` outside a browser.
+ * Effects: none.
  * @returns {Record<string, string|string[]>}
  */
 export function currentUrlParams() {
   if (typeof window === 'undefined' || !window || !window.location) return {};
   const { search, hash } = window.location;
-  const fromHash =
-    typeof hash === 'string' && hash.includes('=') ? parseQuery(hash.replace(/^#\/?\??/, '')) : {};
+  const fromHash = typeof hash === 'string' ? parseQuery(fragmentQuery(hash)) : {};
   const fromQuery = parseQuery(typeof search === 'string' ? search : '');
   return { ...fromHash, ...fromQuery };
 }

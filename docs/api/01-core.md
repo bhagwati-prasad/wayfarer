@@ -8,11 +8,11 @@ Scripts: `core/client.js`, `core/config.js`, `http/client.js`, `http/interceptor
 
 #### `createClient(config?: ClientConfig) → OtaClient`
 Compose http, auth, store, events, storage, i18n, telemetry and every domain module into one client; install plugins; hydrate persisted slices; optionally bootstrap.
-Effects: state all slices (initial) · storage read (hydrate) · emit `client:ready` · net `GET /config` only when `autoBootstrap`.
+Effects: state all slices (initial) · storage read (hydrate) · emit `client:ready` · net `GET /v1/config` (endpoint key `client.bootstrap`) only when `autoBootstrap`.
 
 #### `client.bootstrap(opts?) → Promise<BootstrapConfig>`
 Fetch runtime config: markets, currencies, limits (max pax / legs), feature flags, payment method catalogue, min app version.
-Effects: net `GET /config` · state `bootstrap`, `prefs` (fills gaps) · emit `bootstrap:loaded`, `features:change` · storage `bootstrap` (ttl).
+Effects: net `GET /v1/config` (`client.bootstrap`, overridable via `config.endpoints`) · state `bootstrap`, `prefs` (fills gaps) · emit `bootstrap:loaded`, `features:change` · storage `bootstrap` (ttl).
 
 #### `client.use(plugin: Plugin) → OtaClient`
 Install a plugin (`install(client)` may return an uninstall fn run on `destroy`).
@@ -23,13 +23,13 @@ Change presentation preference; headers for subsequent requests follow automatic
 Effects: state `prefs` · storage `prefs` · emit `prefs:change`.
 
 #### `client.getPrefs() → Prefs` · `client.getConfig() → Readonly<ClientConfig>` · `client.version: string`
-Effects: none.
+Effects: none. `client.version` is the package's `VERSION` export.
 
 #### `client.on(event, fn) → off` · `client.once` · `client.off`
 Shortcuts to `client.events`. Effects: none.
 
 #### `client.snapshot() → Snapshot` · `client.restore(snapshot) → void`
-Serialise / restore store + auth for SSR hydration or redirect round‑trips.
+Serialise / restore the store (persisted + transient slices) for SSR hydration or redirect round‑trips. Auth is **not** part of a snapshot: the `session` slice is registered `secret`, so tokens and the guest identity never leave the client — hosts re‑inject them through `auth.setTokens` / `auth.ensureGuestSession`.
 Effects: state all (restore) · emit `state:change`.
 
 #### `client.destroy() → void`
@@ -53,10 +53,10 @@ Effects: emit `auth:required` · (guest) see `auth.ensureGuestSession`.
 #### `access.can(key) → boolean` · `access.setPolicy(policy) → void` · `access.policy() → AccessPolicy`
 Effects: `setPolicy` emits `access:change`.
 
-Default policy (agencies override any key): `default:'open'`; `'itinerary.*' | 'ancillaries.*' | 'booking.*' | 'payments.*' | 'alerts.createGuest' | 'booking.retrieve' | 'trips.byReference' : 'guest'`; `'travelers.*' | 'trips.*' | 'account.*' | 'wallet.*' | 'alerts.*' | 'support.tickets.*' | 'payments.savedMethods.*' : 'auth'`. Functions that are pure or read‑only reference data stay `'open'`.
+Default policy (exported as `DEFAULT_ACCESS_POLICY`; agencies override any key): `default:'open'`; `'itinerary.*' | 'ancillaries.*' | 'booking.*' | 'payments.*' | 'alerts.createGuest' | 'booking.retrieve' | 'trips.byReference' : 'guest'`; `'travelers.*' | 'trips.*' | 'account.*' | 'wallet.*' | 'alerts.*' | 'support.tickets.*' | 'payments.savedMethods.*' : 'auth'`. Functions that are pure or read‑only reference data stay `'open'`: the resolver cannot infer purity, so a module whose wildcard is `'guest'` / `'auth'` lists such helpers as explicit `'open'` rules (e.g. `'trips.phaseOf': 'open'`) or returns them unwrapped.
 
-#### `core/endpoints.js` — `createEndpoints(overrides?) → { get(key, params?) → string, set(key, template), all() }`
-Path templates per endpoint key (`'search.create' → '/v2/shopping/flight-offers'`, `'offers.reprice' → '/v1/shopping/flight-offers/pricing'`, `'booking.create' → '/v1/booking/flight-orders'`, … SDK‑defined `/v1/...` for everything the Amadeus specs don't cover; full table in `BACKEND-MAPPING.md`). Effects: none.
+#### `core/endpoints.js` — `createEndpoints(overrides?) → { get(key, params?) → string, set(key, template), has(key) → boolean, all() }`
+Path templates per endpoint key (defaults exported as `DEFAULT_ENDPOINTS`; `'search.create' → '/v2/shopping/flight-offers'`, `'offers.reprice' → '/v1/shopping/flight-offers/pricing'`, `'booking.create' → '/v1/booking/flight-orders'`, … SDK‑defined `/v1/...` for everything the Amadeus specs don't cover, including the `auth.*` rows of §5 and `client.bootstrap` → `/v1/config`; full table in `BACKEND-MAPPING.md`). Effects: none.
 
 ---
 
@@ -123,6 +123,9 @@ Effects: storage (cache namespace).
 #### `http.inflight(tag?) → number` · `http.lastRequestId() → string|undefined`
 Effects: none.
 
+#### `http.destroy() → void`
+Abort every in‑flight request and open stream (`reason 'destroyed'`), drop interceptors, hooks and the dedupe table; later requests reject with `AbortError`. Called by `client.destroy()`. Effects: net abort · emit `http:abort` per request.
+
 ### 3.1 Lifecycle context (`ctx`) passed to interceptors and hooks
 
 ```
@@ -144,7 +147,7 @@ Order: `prepare → request interceptors (asc priority) → beforeRequest → ca
 
 | factory | task | side effects |
 |---|---|---|
-| `authInterceptor({ auth, exclude?: RegExp[] })` | Attach `Authorization: Bearer <token>` (or `X-Session-Id` for guests); on 401 run `auth.refresh()` single‑flight, then `ctx.retry()`; on refresh failure clear session | emit `auth:expired` · state `session` |
+| `authInterceptor({ auth, exclude?: RegExp[] })` | Attach `Authorization: Bearer <token>` (or `X-Guest-Token` for guests); on 401 run `auth.refresh()` single‑flight, then `ctx.retry()`; on refresh failure clear session | emit `auth:expired` · state `session` |
 | `apiKeyInterceptor({ key, header = 'X-Api-Key' })` | Public key header | none |
 | `localeInterceptor({ store })` | `Accept-Language`, `X-Currency`, `X-Market` from `prefs` | none |
 | `correlationInterceptor({ header = 'X-Request-Id', sessionHeader = 'X-Client-Session' })` | Per‑request id + per‑tab session id; echoes server `X-Request-Id` into errors | storage `clientSession` |
@@ -160,7 +163,7 @@ Order: `prepare → request interceptors (asc priority) → beforeRequest → ca
 | `loggingInterceptor({ logger, redact = ['authorization','password','card','documents'] })` | Debug log of request/response with redaction | none |
 | `mockInterceptor(handlers, { delayMs? })` | Dev only: short‑circuit matching requests with fixtures | none |
 
-Default installation order (priority): correlation(10) → apiKey(20) → locale(30) → device(35) → csrf(40) → auth(50) → idempotency(60) → cache(70) → dedupe(80) → logging(90) → telemetry(95); response: envelope(10) → problem(20); error: problem(10) → auth(20) → rateLimit(30).
+Default installation order (priority, exported as `DEFAULT_PRIORITIES`): correlation(10) → apiKey(20) → locale(30) → device(35) → csrf(40) → auth(50) → idempotency(60) → cache(70) → dedupe(80) → logging(90) → telemetry(95); response: envelope(10) → problem(20); error: problem(10) → auth(20) → rateLimit(30). `installDefaultInterceptors` skips `cache` and `dedupe` when the client runs the §3.1 cache / dedupe stage itself (`createHttp` does — it exposes `http.cache` and `http.inflight()`), so no response is stored twice under two key schemes; `deps.cache` / `deps.dedupe` (booleans) force either bundle on or off.
 
 ---
 
@@ -179,11 +182,11 @@ Host‑owned auth (SSO) injects tokens; schedules proactive refresh at `expiresA
 Effects: state `session` · storage `refreshToken` (per `tokenStorage`) · timer refresh · emit `auth:login`.
 
 #### `auth.clearTokens() → void`
-Effects: state `session` → anonymous · storage remove · timer clear · emit `auth:logout`.
+Effects: state `session` → anonymous (`guest` when a guest identity is still persisted) · storage remove · timer clear · emit `auth:logout`.
 
 #### `auth.refresh(opts?) → Promise<Tokens>`
 Single‑flight token refresh; concurrent callers share one request; requests queued by `authInterceptor` resume after.
-Effects: net `POST /auth/refresh` · state `session` · storage · emit `auth:refreshed` | `auth:expired`.
+Effects: net `POST /v1/auth/refresh` · state `session` · storage · emit `auth:refreshed` | `auth:expired`.
 Throws: `AuthError{reason:'expired'}`.
 
 #### `auth.ensureGuestSession(opts?) → Promise<{ guestId, guestToken }>`
@@ -204,32 +207,35 @@ Effects: net `POST /v1/auth/claim/complete` · state `session`, `account.user` �
 Throws: `AuthError{reason:'otp_invalid'|'otp_expired'}`, `ValidationError` (password policy).
 
 #### `auth.register({ email?, phone?, password?, firstName?, lastName?, consents, otpChallengeId? }, opts?) → Promise<User>`
-Create account, log in. Effects: net `POST /auth/register` · state `session`, `account.user` · storage · emit `auth:login`.
+Create account, log in. Effects: net `POST /v1/auth/register` · state `session`, `account.user` · storage · emit `auth:login`.
 
 #### `auth.loginWithPassword({ identifier, password, remember? }, opts?) → Promise<User>`
-Effects: net `POST /auth/login` · state `session`, `account.user` · storage · emit `auth:login` | `auth:mfaRequired`.
+Effects: net `POST /v1/auth/login` · state `session`, `account.user` · storage · emit `auth:login` | `auth:mfaRequired`.
 Throws: `AuthError{reason:'invalid_credentials'|'mfa_required'|'locked'}`.
 
 #### `auth.requestOtp({ channel: 'sms'|'email'|'whatsapp', identifier, purpose: 'login'|'register'|'verify'|'reset' }, opts?) → Promise<{ challengeId, expiresAt, resendAfterMs }>`
-Effects: net `POST /auth/otp/request`.
+Effects: net `POST /v1/auth/otp/request`.
 
 #### `auth.verifyOtp({ challengeId, code, remember? }, opts?) → Promise<User | { challengeId, requires: 'register' }>`
-Effects: net `POST /auth/otp/verify` · state `session` · storage · emit `auth:login`. Throws: `AuthError{reason:'otp_invalid'|'otp_expired'}`.
+Effects: net `POST /v1/auth/otp/verify` · state `session` · storage · emit `auth:login`. Throws: `AuthError{reason:'otp_invalid'|'otp_expired'}`.
 
-#### `auth.getProviderUrl(provider, { redirectUri, state? }) → Promise<string>` · `auth.loginWithProvider({ provider, code?, idToken?, redirectUri?, nonce? }, opts?) → Promise<User>`
-OAuth / OIDC (google, apple, facebook, …). Effects: net `GET /auth/providers/{p}/url`, `POST /auth/providers/{p}/callback` · state `session` · storage · emit `auth:login`.
+#### `auth.getProviderUrl(provider, { redirectUri, state? }, opts?) → Promise<string>` · `auth.loginWithProvider({ provider, code?, idToken?, redirectUri?, nonce? }, opts?) → Promise<User>`
+OAuth / OIDC (google, apple, facebook, …). Effects: net `GET /v1/auth/providers/{p}/url`, `POST /v1/auth/providers/{p}/callback` · state `session` · storage · emit `auth:login`.
 
 #### `auth.requestMagicLink({ email, redirectUri }, opts?) → Promise<void>` · `auth.consumeMagicLink(token, opts?) → Promise<User>`
-Effects: net `POST /auth/magic-link`, `POST /auth/magic-link/consume` · state · storage · emit `auth:login`.
+Effects: net `POST /v1/auth/magic-link`, `POST /v1/auth/magic-link/consume` · state · storage · emit `auth:login`.
 
 #### `auth.mfa.verify({ challengeId, code, method }, opts?) → Promise<User>`
-Second factor after `auth:mfaRequired`. Effects: net `POST /auth/mfa/verify` · state · emit `auth:login`.
+Second factor after `auth:mfaRequired`. Effects: net `POST /v1/auth/mfa/verify` · state · emit `auth:login`.
 
 #### `auth.logout({ everywhere? }, opts?) → Promise<void>`
-Effects: net `POST /auth/logout` (best effort) · state `session`, `account`, `travelers`, `trips`, `wallet`, `alerts` reset · storage remove tokens · http abort tag `authed` · emit `auth:logout`.
+Effects: net `POST /v1/auth/logout` (best effort) · state `session`, `account`, `travelers`, `trips`, `wallet`, `alerts` reset · storage remove tokens · http abort tag `authed` · emit `auth:logout`.
 
 #### `auth.onChange(fn: (session) => void) → off`
 Effects: none.
 
 #### `auth.willExpireWithin(ms) → boolean` · `auth.getExpiry() → DateTime|null`
 Effects: none.
+
+#### `auth.destroy() → void`
+Stop the proactive refresh timer, discard the result of any refresh still in flight and release the store / events subscriptions (persisted tokens are kept for the next client). Called by `client.destroy()`. Effects: timer clear.

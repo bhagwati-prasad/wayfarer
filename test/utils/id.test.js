@@ -205,3 +205,80 @@ describe('isUuid', () => {
     expect(isUuid({})).toBe(false);
   });
 });
+
+describe('randomness plumbing', () => {
+  it('shortId fills more than 64 KiB in quota-sized slices of one buffer', () => {
+    const sizes = [];
+    const getRandomValues = vi.fn((arr) => {
+      sizes.push(arr.length);
+      arr.fill(10);
+      return arr;
+    });
+    vi.stubGlobal('crypto', { getRandomValues });
+    const id = shortId(70000);
+    expect(id).toHaveLength(70000);
+    expect(id).toMatch(/^a+$/);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(65536);
+    expect(sizes.reduce((s, n) => s + n, 0)).toBe(70004);
+    for (const call of getRandomValues.mock.calls) expect(call[0]).toBeInstanceOf(Uint8Array);
+  });
+
+  it('shortId above the quota works against the real Web Crypto without throwing', () => {
+    expect(typeof globalThis.crypto?.getRandomValues).toBe('function');
+    expect(shortId(70000)).toMatch(/^[0-9a-z]{70000}$/);
+  });
+
+  it('uuid and shortId fall back to Math.random when crypto has no usable methods', () => {
+    vi.stubGlobal('crypto', {});
+    const mathRandom = vi.spyOn(Math, 'random').mockReturnValue(0);
+    expect(uuid()).toBe('00000000-0000-4000-8000-000000000000');
+    expect(shortId(2)).toBe('00');
+    expect(mathRandom).toHaveBeenCalled();
+  });
+
+  it('looks crypto up at call time, not import time', () => {
+    const randomUUID = vi.fn(() => 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    vi.stubGlobal('crypto', { randomUUID });
+    expect(uuid()).toBe('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    vi.stubGlobal('crypto', null);
+    const mathRandom = vi.spyOn(Math, 'random').mockReturnValue(0);
+    expect(uuid()).toBe('00000000-0000-4000-8000-000000000000');
+    expect(mathRandom).toHaveBeenCalled();
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('idempotencyKey — header safety and payload normalisation', () => {
+  it('rejects control characters in scope but accepts other punctuation', () => {
+    for (const scope of ['book\ning', 'a\tb', 'x\u0000', 'del\u007f', 'cr\r']) {
+      let err;
+      try {
+        idempotencyKey(scope, {});
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.code).toBe('VALIDATION_FAILED');
+      expect(err.issues[0]).toMatchObject({ path: 'scope', code: 'pattern' });
+    }
+    expect(idempotencyKey('/bookings:create', {})).toMatch(/^\/bookings:create-[0-9a-z]{1,11}$/);
+    expect(idempotencyKey('payment:intent', 1)).toBe(`payment:intent-${hash('1')}`);
+  });
+
+  it('normalises Dates through toJSON and ignores undefined fields', () => {
+    expect(idempotencyKey('b', { at: new Date(0) })).toBe(
+      idempotencyKey('b', { at: '1970-01-01T00:00:00.000Z' })
+    );
+    expect(idempotencyKey('b', { a: 1, x: undefined })).toBe(idempotencyKey('b', { a: 1 }));
+    expect(idempotencyKey('b', { a: 1, x: null })).not.toBe(idempotencyKey('b', { a: 1 }));
+    expect(idempotencyKey('b', [1, 2])).not.toBe(idempotencyKey('b', [2, 1]));
+  });
+});
+
+describe('isUuid — nil and max', () => {
+  it('rejects the nil and max UUIDs, which carry no version', () => {
+    expect(isUuid('00000000-0000-0000-0000-000000000000')).toBe(false);
+    expect(isUuid('ffffffff-ffff-ffff-ffff-ffffffffffff')).toBe(false);
+    expect(isUuid('00000000-0000-1000-8000-000000000000')).toBe(true);
+  });
+});

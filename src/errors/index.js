@@ -103,7 +103,12 @@ function toStatus(v) {
   return n !== undefined && Number.isInteger(n) && n >= 0 ? n : 0;
 }
 
-/** Upper‑snake normalisation of a backend code; `undefined` when it is not code‑shaped. */
+/**
+ * Upper‑snake normalisation of a backend code (`offer-expired`, `priceChanged`, `2FA_REQUIRED` →
+ * `OFFER_EXPIRED`, `PRICE_CHANGED`, `2FA_REQUIRED`); `undefined` when it is not code‑shaped (empty,
+ * purely numeric such as a status, or containing other punctuation). Codes are always upper‑case, so
+ * they can never collide with `Object.prototype` members when used as lookup keys.
+ */
 function normalizeCode(v) {
   if (typeof v !== 'string') return undefined;
   const s = v
@@ -111,30 +116,47 @@ function normalizeCode(v) {
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/[-\s.]+/g, '_')
     .toUpperCase();
-  return /^[A-Z][A-Z0-9_]*$/.test(s) ? s : undefined;
+  return /^(?=[A-Z0-9_]*[A-Z])[A-Z0-9][A-Z0-9_]*$/.test(s) ? s : undefined;
 }
 
-/** `https://api.ota.com/problems/offer-expired` → `OFFER_EXPIRED`; `about:blank` → undefined. */
+/**
+ * Last path segment of a problem `type` as a code: `https://api.ota.com/problems/offer-expired` →
+ * `OFFER_EXPIRED`, `urn:ota:problem:priceChanged` → `PRICE_CHANGED`. `about:blank`, a bare origin
+ * (`https://api.ota.com`) and numeric segments (`…/409`) give `undefined` so the status mapping applies.
+ */
 function codeFromType(type) {
   if (typeof type !== 'string') return undefined;
-  const t = type.trim();
-  if (!t || t === 'about:blank') return undefined;
-  const bare = t.split(/[?#]/)[0].replace(/\/+$/, '');
-  const segments = bare.split(/[/:]/).filter(Boolean);
-  if (segments.length < 2 && !/^[a-z]/i.test(bare)) return undefined;
+  const t = type.trim().split(/[?#]/)[0];
+  if (!t || /^about:blank\/*$/i.test(t)) return undefined;
+  // Drop `scheme://authority` so a host name is never mistaken for a code.
+  const url = /^[a-z][a-z0-9+.-]*:\/\/[^/]*(.*)$/i.exec(t);
+  const path = url ? url[1] : t;
+  const segments = path.split(/[/:]/).filter(Boolean);
   const last = segments[segments.length - 1];
-  return last && !/^https?$/i.test(last) ? normalizeCode(last) : undefined;
+  return last ? normalizeCode(last.replace(/\.(html?|json|md|txt)$/i, '')) : undefined;
 }
 
-/** @param {unknown} v @returns {Money|undefined} */
+const AMOUNT_RE = /^-?\d+(\.\d+)?$/;
+const CURRENCY_RE = /^[A-Za-z]{3}$/;
+
+/**
+ * Strict `Money` reader: a decimal amount (string or finite number) and an ISO‑4217 looking currency.
+ * Anything else is dropped so server‑supplied free text can never reach `toUserMessage` through
+ * `PriceChangedError.from` / `to`.
+ * @param {unknown} v @returns {Money|undefined}
+ */
 function toMoney(v) {
   if (!isObject(v)) return undefined;
-  const amount = v.amount;
-  const currency = str(v.currency);
-  if ((typeof amount === 'string' && amount !== '') || typeof amount === 'number') {
-    return { amount: String(amount), currency: currency || '' };
-  }
-  return undefined;
+  const amount =
+    typeof v.amount === 'number' && Number.isFinite(v.amount)
+      ? String(v.amount)
+      : typeof v.amount === 'string'
+        ? v.amount.trim()
+        : undefined;
+  const currency = typeof v.currency === 'string' ? v.currency.trim() : undefined;
+  if (amount === undefined || !AMOUNT_RE.test(amount)) return undefined;
+  if (currency === undefined || !CURRENCY_RE.test(currency)) return undefined;
+  return { amount, currency: currency.toUpperCase() };
 }
 
 const STATUS_CODES = Object.freeze({
@@ -211,15 +233,14 @@ const PROBLEM_MEMBERS = new Set([
   'requestId',
 ]);
 
-/** Extension members of a problem document (everything outside RFC 9457 + known extensions). */
+/**
+ * Extension members of a problem document (everything outside RFC 9457 + known extensions). Built
+ * with `Object.fromEntries` so a hostile key such as `__proto__` becomes an own property instead of
+ * re‑pointing the prototype.
+ */
 function problemExtensions(problem) {
-  /** @type {Record<string, unknown>} */
-  const out = {};
-  if (!isObject(problem)) return out;
-  for (const [k, v] of Object.entries(problem)) {
-    if (!PROBLEM_MEMBERS.has(k)) out[k] = v;
-  }
-  return out;
+  if (!isObject(problem)) return {};
+  return Object.fromEntries(Object.entries(problem).filter(([k]) => !PROBLEM_MEMBERS.has(k)));
 }
 
 /** JSON pointer (`/data/travelers/0/lastName`) → dotted path (`data.travelers.0.lastName`). */
@@ -233,11 +254,16 @@ function pointerToPath(pointer) {
   return parts.length ? parts.join('.') : undefined;
 }
 
-/** @param {unknown} issues @returns {Record<string, string[]>} */
+/**
+ * `errors[]` issues → `{ path: [messages] }`. Paths are server‑controlled, so the accumulator is a
+ * `Map` (a pointer such as `/__proto__` or a parameter named `constructor` must neither crash nor
+ * reach the prototype).
+ * @param {unknown} issues @returns {Record<string, string[]>}
+ */
 function fieldErrorsFromIssues(issues) {
-  /** @type {Record<string, string[]>} */
-  const out = {};
-  if (!Array.isArray(issues)) return out;
+  /** @type {Map<string, string[]>} */
+  const out = new Map();
+  if (!Array.isArray(issues)) return {};
   for (const issue of issues) {
     if (!isObject(issue)) continue;
     const source = isObject(issue.source) ? issue.source : {};
@@ -252,21 +278,23 @@ function fieldErrorsFromIssues(issues) {
       str(issue.message) ||
       str(issue.title) ||
       (issue.code !== undefined && issue.code !== null ? String(issue.code) : 'invalid');
-    (out[path] ||= []).push(message);
+    const list = out.get(path);
+    if (list) list.push(message);
+    else out.set(path, [message]);
   }
-  return out;
+  return Object.fromEntries(out);
 }
 
 /** @param {unknown} v @returns {Record<string, string[]>|undefined} */
 function asFieldErrors(v) {
   if (!isObject(v)) return undefined;
-  /** @type {Record<string, string[]>} */
-  const out = {};
+  /** @type {[string, string[]][]} */
+  const entries = [];
   for (const [k, val] of Object.entries(v)) {
-    if (Array.isArray(val)) out[k] = val.map((m) => String(m));
-    else if (typeof val === 'string') out[k] = [val];
+    if (Array.isArray(val)) entries.push([k, val.map((m) => String(m))]);
+    else if (typeof val === 'string') entries.push([k, [val]]);
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 // ── class tree ──────────────────────────────────────────────────────────────────────────────────
@@ -774,8 +802,9 @@ export function isRetryable(e) {
 }
 
 /**
- * `e instanceof Class`, tolerant of duplicate SDK copies (falls back to constructor names along the
- * prototype chain for branded foreign errors). A string `Class` matches on `code` instead.
+ * `e instanceof Class`, tolerant of duplicate SDK copies: when the error or the class comes from
+ * another bundle of the SDK (brand symbol on the prototype) it falls back to constructor names along
+ * the prototype chain. A string `Class` matches on `code` instead. Never throws.
  * @param {unknown} e
  * @param {Function|string} Class
  * @returns {boolean}
@@ -783,8 +812,15 @@ export function isRetryable(e) {
 export function is(e, Class) {
   if (typeof Class === 'string') return isSdkError(e) && e.code === Class;
   if (typeof Class !== 'function') return false;
+  const classProto = Class.prototype;
+  // An arrow function / bound function has no usable prototype; `instanceof` would throw a TypeError.
+  if (classProto === null || (typeof classProto !== 'object' && typeof classProto !== 'function')) {
+    return false;
+  }
   if (e instanceof Class) return true;
-  if (!isSdkError(e) || e instanceof SdkError) return false;
+  // Name fallback only when both sides are SDK errors and at least one comes from another copy.
+  if (!isSdkError(e) || classProto[BRAND] !== true) return false;
+  if (e instanceof SdkError && extendsClass(Class, SdkError)) return false;
   let proto = Object.getPrototypeOf(e);
   while (proto) {
     if (proto.constructor && proto.constructor.name === Class.name) return true;
@@ -820,6 +856,7 @@ const DEFAULT_CODE_MAP = Object.freeze({
   HOLD_NOT_ALLOWED: BookingError,
   CHANGE_NOT_ALLOWED: ServicingError,
   CANCEL_NOT_ALLOWED: ServicingError,
+  SERVICING_NOT_ALLOWED: ServicingError,
   NAME_MISMATCH: UnprocessableError,
   DOCUMENT_INVALID: UnprocessableError,
   DUPLICATE_TRAVELER: UnprocessableError,
@@ -935,7 +972,8 @@ function construct(Class, ctx) {
   /** @type {Record<string, unknown>} */
   const options = {
     code: ctx.code,
-    status: ctx.status,
+    // A document without `status` lets the class default apply (`OFFER_EXPIRED` → 410).
+    status: ctx.status || undefined,
     problem: ctx.problem,
     issues: ctx.issues,
     requestId: ctx.requestId,
@@ -980,7 +1018,7 @@ export function errorFromProblem(problem, options = {}) {
     problem: problemDoc,
     code,
     status,
-    message: str(p.detail) || str(p.title) || messageForStatus(status),
+    message: str(p.detail) || str(p.title) || str(p.message) || messageForStatus(status),
     requestId: str(o.requestId) || str(p.requestId),
     issues: Array.isArray(p.errors) ? /** @type {ProblemIssue[]} */ (p.errors) : undefined,
     ext: problemExtensions(p),
@@ -1003,29 +1041,58 @@ export function errorFromProblem(problem, options = {}) {
   return construct(classForStatus(status), ctx);
 }
 
-/** Case‑insensitive header read over `Headers`, `Map` or a plain object. */
-function headerGet(headers, name) {
-  if (!headers) return undefined;
-  const lower = name.toLowerCase();
-  if (typeof headers.get === 'function') {
-    const v = headers.get(name) ?? headers.get(lower);
-    return v === null || v === undefined ? undefined : String(v);
-  }
-  if (isObject(headers)) {
-    for (const [k, v] of Object.entries(headers)) {
-      if (k.toLowerCase() === lower && v !== undefined && v !== null) {
-        return String(Array.isArray(v) ? v[0] : v);
-      }
+/** First non‑empty header value as a string (multi‑valued headers keep their first entry). */
+function headerValue(v) {
+  const first = Array.isArray(v) ? v[0] : v;
+  return first === null || first === undefined ? undefined : String(first);
+}
+
+/** `[name, value]` pairs of a `Headers`, `Map`, tuple array or plain object; `[]` when unreadable. */
+function headerEntries(headers) {
+  if (Array.isArray(headers)) return headers;
+  if (typeof headers.entries === 'function') {
+    try {
+      return /** @type {Iterable<unknown>} */ (headers.entries());
+    } catch {
+      return [];
     }
+  }
+  return Object.entries(headers);
+}
+
+/**
+ * Case‑insensitive header read over `Headers`, a `Map` (any key case), an array of `[name, value]`
+ * tuples or a plain object. Never throws: a `get` that throws is treated as a miss.
+ */
+function headerGet(headers, name) {
+  if (!headers || typeof headers !== 'object') return undefined;
+  const lower = name.toLowerCase();
+  if (!Array.isArray(headers) && typeof headers.get === 'function') {
+    try {
+      const direct = headerValue(headers.get(lower));
+      if (direct !== undefined) return direct;
+    } catch {
+      // fall through to a scan of the entries
+    }
+  }
+  for (const entry of headerEntries(headers)) {
+    if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+    if (entry[0].toLowerCase() !== lower) continue;
+    const value = headerValue(entry[1]);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
 
-/** `Retry-After` header (delta‑seconds or HTTP‑date) → milliseconds, or undefined. */
+/**
+ * `Retry-After` header → milliseconds, or undefined. Accepts delta‑seconds (integer or decimal) and
+ * an HTTP‑date (must contain letters, so `1.5` is never mistaken for a date); a date in the past is 0.
+ */
 function parseRetryAfter(value, now) {
   const v = str(value)?.trim();
   if (!v) return undefined;
-  if (/^\d+$/.test(v)) return Number(v) * 1000;
+  if (/^\d+(\.\d+)?$/.test(v)) return Math.round(Number(v) * 1000);
+  if (!/[A-Za-z]/.test(v)) return undefined;
   const at = Date.parse(v);
   return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
@@ -1068,6 +1135,7 @@ const LEGACY_MEMBERS = new Set([
   'errorCode',
   'message',
   'error',
+  'error_description',
   'errors',
   'details',
   'requestId',
@@ -1076,15 +1144,25 @@ const LEGACY_MEMBERS = new Set([
 ]);
 
 /**
- * Legacy `{ code, message }` (also nested `{ error: {…} }` and `{ errors: [{…}] }`) → problem.
+ * Legacy `{ code, message }` (also nested `{ error: {…} }`, `{ errors: [{…}] }` and OAuth
+ * `{ error, error_description }`) → problem. A string `error` is a code only when it is code‑shaped
+ * (no whitespace, e.g. `invalid_grant`); a sentence (`"Something went wrong"`) is the message.
  * @param {Record<string, unknown>} body @param {number} status @returns {Problem}
  */
 function legacyToProblem(body, status) {
   const nested = isObject(body.error) ? body.error : undefined;
   const list = Array.isArray(body.errors) ? body.errors.filter(isObject) : [];
   const src = nested || (body.code === undefined && list.length ? list[0] : body);
-  const code = str(src.code) || str(src.errorCode) || str(src.error);
-  const message = str(src.message) || str(src.detail) || str(src.description) || str(src.title);
+  const errorString = str(src.error);
+  const errorIsCode = errorString !== undefined && !/\s/.test(errorString);
+  const code = str(src.code) || str(src.errorCode) || (errorIsCode ? errorString : undefined);
+  const message =
+    str(src.message) ||
+    str(src.detail) ||
+    str(src.error_description) ||
+    str(src.description) ||
+    str(src.title) ||
+    (errorIsCode ? undefined : errorString);
   /** @type {Problem} */
   const problem = {
     type: 'about:blank',
@@ -1099,7 +1177,8 @@ function legacyToProblem(body, status) {
   if (issues && issues.length) problem.errors = /** @type {ProblemIssue[]} */ (issues);
   for (const source of [body, src]) {
     for (const [k, v] of Object.entries(source)) {
-      if (!LEGACY_MEMBERS.has(k) && !(k in problem)) problem[k] = v;
+      if (LEGACY_MEMBERS.has(k) || k === '__proto__' || Object.hasOwn(problem, k)) continue;
+      problem[k] = v;
     }
   }
   return problem;
@@ -1113,7 +1192,7 @@ function legacyToProblem(body, status) {
  * `requestId`. Effects: none.
  * @param {number} status
  * @param {unknown} body            Parsed JSON, raw text, or empty.
- * @param {Headers|Record<string, string|string[]>|Map<string, string>|undefined|null} headers
+ * @param {Headers|Record<string, string|string[]>|Map<string, string>|[string, string|string[]][]|undefined|null} headers
  * @param {{ requestId?: string, map?: Record<string, typeof ApiError | ((ctx: ProblemContext) => ApiError)>, now?: number }} [options]
  * @returns {ApiError}
  */
@@ -1154,17 +1233,24 @@ export function errorFromResponse(status, body, headers, options = {}) {
 const NETWORK_ERROR_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
   'ENOTFOUND',
   'EAI_AGAIN',
   'EPIPE',
   'EHOSTUNREACH',
+  'EHOSTDOWN',
   'ENETUNREACH',
+  'ENETDOWN',
+  'ERR_NETWORK',
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_SOCKET',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
 ]);
-const NETWORK_MESSAGE = /fetch|network|load failed|connection|socket|ECONN|ENOTFOUND|EAI_AGAIN/i;
+/** fetch `TypeError` messages that mean the transport failed (incl. undici's `terminated`, a body dropped mid‑read). */
+const NETWORK_MESSAGE =
+  /fetch|network|load failed|connection|socket|terminated|ECONN|ENOTFOUND|EAI_AGAIN/i;
 const STORAGE_NAMES = new Set([
   'QuotaExceededError',
   'SecurityError',
@@ -1211,6 +1297,9 @@ export function wrap(e, fallback = {}) {
   const name = str(err.name) || '';
   const message = str(err.message) || fb.message;
   const code = str(err.code);
+  // undici reports the socket error on `cause` (`TypeError: fetch failed` → cause.code `ENOTFOUND`).
+  const causeCode = isObject(err.cause) ? str(err.cause.code) : undefined;
+  const netCode = [code, causeCode].find((c) => c && NETWORK_ERROR_CODES.has(c));
 
   if (name === 'AbortError') {
     return new AbortError(message, { reason: str(err.reason), cause: e });
@@ -1225,12 +1314,17 @@ export function wrap(e, fallback = {}) {
     return new StorageError(message, { cause: e });
   }
   if (
-    (e instanceof TypeError && NETWORK_MESSAGE.test(message)) ||
+    // `name` rather than `instanceof TypeError`: fetch errors may come from another realm (iframe, jsdom).
+    (name === 'TypeError' && NETWORK_MESSAGE.test(message)) ||
+    name === 'NetworkError' ||
     name === 'FetchError' ||
     err.type === 'api_connection_error' ||
-    (code && NETWORK_ERROR_CODES.has(code))
+    netCode !== undefined
   ) {
-    return new NetworkError(message, { cause: e, details: code ? { code } : undefined });
+    return new NetworkError(message, {
+      cause: e,
+      details: netCode ? { code: netCode } : undefined,
+    });
   }
   if (err.type === 'card_error' || typeof err.decline_code === 'string') {
     return new PaymentError(message, {
@@ -1467,54 +1561,65 @@ function formatMoney(m) {
 }
 
 /**
- * Pick the copy key + interpolation vars for an error. Never reads `err.message` or `details`.
+ * Pick the copy key + interpolation vars for an error. Never reads `err.message` or `details`; the
+ * only interpolated values are validated `Money` amounts and a whole number of seconds. Uses `is()`
+ * so a branded error from another copy of the SDK gets the same copy as a local one.
  * @param {SdkError} err
  * @returns {{ key: string, vars: Record<string, unknown> }}
  */
 function describe(err) {
-  if (err instanceof AuthError) return { key: `auth.${err.reason}`, vars: {} };
-  if (err instanceof RateLimitError) {
-    if (err.retryAfterMs !== undefined && err.retryAfterMs > 0) {
-      return { key: 'rate_limit.seconds', vars: { seconds: Math.ceil(err.retryAfterMs / 1000) } };
+  const copyKey = (key) => ({ key, vars: {} });
+  const e = /** @type {any} */ (err);
+  if (is(err, AuthError)) {
+    return copyKey(`auth.${oneOf(e.reason, AUTH_REASONS) || 'unauthenticated'}`);
+  }
+  if (is(err, RateLimitError)) {
+    const ms = num(e.retryAfterMs);
+    if (ms !== undefined && ms > 0) {
+      return { key: 'rate_limit.seconds', vars: { seconds: Math.ceil(ms / 1000) } };
     }
-    return { key: 'rate_limit', vars: {} };
+    return copyKey('rate_limit');
   }
-  if (err instanceof NotFoundError) return { key: 'not_found', vars: {} };
-  if (err instanceof ConflictError) return { key: 'conflict', vars: {} };
-  if (err instanceof SearchExpiredError) return { key: 'search_expired', vars: {} };
-  if (err instanceof OfferExpiredError) return { key: 'offer_expired', vars: {} };
-  if (err instanceof OfferUnavailableError) {
-    return { key: `offer_unavailable.${err.reason}`, vars: {} };
+  if (is(err, NotFoundError)) return copyKey('not_found');
+  if (is(err, ConflictError)) return copyKey('conflict');
+  if (is(err, SearchExpiredError)) return copyKey('search_expired');
+  if (is(err, OfferExpiredError)) return copyKey('offer_expired');
+  if (is(err, OfferUnavailableError)) {
+    return copyKey(`offer_unavailable.${oneOf(e.reason, OFFER_UNAVAILABLE_REASONS) || 'sold_out'}`);
   }
-  if (err instanceof PriceChangedError) {
-    if (err.from && err.to) {
+  if (is(err, PriceChangedError)) {
+    const from = toMoney(e.from);
+    const to = toMoney(e.to);
+    if (from && to) {
       return {
         key: 'price_changed.amounts',
-        vars: { from: formatMoney(err.from), to: formatMoney(err.to) },
+        vars: { from: formatMoney(from), to: formatMoney(to) },
       };
     }
-    return { key: 'price_changed', vars: {} };
+    return copyKey('price_changed');
   }
-  if (err instanceof ItineraryExpiredError) return { key: 'itinerary_expired', vars: {} };
-  if (err instanceof BookingError) return { key: `booking.${err.suggestedAction}`, vars: {} };
-  if (err instanceof PaymentError) return { key: `payment.${err.reason}`, vars: {} };
-  if (err instanceof ServicingError) return { key: 'servicing', vars: {} };
-  if (err instanceof UnprocessableError) return { key: 'unprocessable', vars: {} };
-  if (err instanceof ApiError)
-    return { key: err.retryable ? 'api.retryable' : 'api.failed', vars: {} };
-  if (err instanceof NetworkError) return { key: 'network', vars: {} };
-  if (err instanceof TimeoutError) return { key: 'timeout', vars: {} };
-  if (err instanceof AbortError) return { key: 'abort', vars: {} };
-  if (err instanceof ValidationError) return { key: 'validation', vars: {} };
-  if (err instanceof ConfigError) return { key: 'config', vars: {} };
-  if (err instanceof StorageError) return { key: 'storage', vars: {} };
-  if (err instanceof UnsupportedError) return { key: 'unsupported', vars: {} };
-  return { key: 'unknown', vars: {} };
+  if (is(err, ItineraryExpiredError)) return copyKey('itinerary_expired');
+  if (is(err, BookingError)) {
+    return copyKey(`booking.${oneOf(e.suggestedAction, BOOKING_ACTIONS) || 'contact_support'}`);
+  }
+  if (is(err, PaymentError))
+    return copyKey(`payment.${oneOf(e.reason, PAYMENT_REASONS) || 'gateway'}`);
+  if (is(err, ServicingError)) return copyKey('servicing');
+  if (is(err, UnprocessableError)) return copyKey('unprocessable');
+  if (is(err, ApiError)) return copyKey(err.retryable === true ? 'api.retryable' : 'api.failed');
+  if (is(err, NetworkError)) return copyKey('network');
+  if (is(err, TimeoutError)) return copyKey('timeout');
+  if (is(err, AbortError)) return copyKey('abort');
+  if (is(err, ValidationError)) return copyKey('validation');
+  if (is(err, ConfigError)) return copyKey('config');
+  if (is(err, StorageError)) return copyKey('storage');
+  if (is(err, UnsupportedError)) return copyKey('unsupported');
+  return copyKey('unknown');
 }
 
-/** `{seconds}` style interpolation for the built‑in copy. */
+/** `{seconds}` style interpolation for the built‑in copy (own vars only). */
 function interpolate(template, vars) {
-  return template.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+  return template.replace(/\{(\w+)\}/g, (m, k) => (Object.hasOwn(vars, k) ? String(vars[k]) : m));
 }
 
 /**

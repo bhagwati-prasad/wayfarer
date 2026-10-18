@@ -359,6 +359,33 @@ describe('request: prepare and resolve', () => {
     expect(metaSeen.get('feature')).toBe('search');
     expect(res.meta).toEqual({ feature: 'search', added: true });
   });
+
+  it('never mutates the caller’s opts (headers, query, meta, cache), whatever interceptors do', async () => {
+    const fetch = sequenceFetch(json({}));
+    const { http } = make({ fetch });
+    http.interceptors.request.use((spec, ctx) => {
+      ctx.setHeader('X-Added', '1');
+      ctx.setQuery('added', 1);
+      spec.meta.touched = true;
+      spec.cache.ttlMs = 1;
+      spec.headers['X-Direct'] = 'd';
+      ctx.meta.set('m', 1);
+    });
+    const opts = {
+      headers: { 'X-Orig': 'a' },
+      query: { q: 'DEL' },
+      meta: { feature: 'x' },
+      cache: { ttlMs: 1000 },
+      tag: 't',
+    };
+    const before = JSON.stringify(opts);
+    const res = await http.get('/v1/a', opts);
+    expect(JSON.stringify(opts)).toBe(before);
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/v1/a?q=DEL&added=1`);
+    expect(init.headers).toMatchObject({ 'X-Orig': 'a', 'X-Added': '1', 'X-Direct': 'd' });
+    expect(res.meta).toEqual({ feature: 'x', m: 1 });
+  });
 });
 
 // ── interceptors ─────────────────────────────────────────────────────────────────────────────────
@@ -543,10 +570,70 @@ describe('interceptors', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer new-token');
+    // one http:retry per retry, one http:response per request (the nested attempt's is the one)
     expect(seen.map((e) => e.type)).toEqual([
       'http:request',
+      'http:retry',
       'http:request',
       'http:response',
+    ]);
+    expect(seen[1]).toMatchObject({ id: res.requestId, attempt: 2, delayMs: 0 });
+    expect(seen[1].error).toBeInstanceOf(AuthError);
+    expect(seen[3]).toMatchObject({ attempts: 2, status: 200 });
+  });
+
+  it('an error settled by a nested ctx.retry() is final: later interceptors and the policy do not run on it again', async () => {
+    const fetch = sequenceFetch(problem(503, { title: 'busy' }));
+    const { http, events } = make({ fetch, retries: 0 });
+    const seen = recordEvents(events);
+    const onRetry = vi.fn();
+    http.hooks.on('onRetry', onRetry);
+    const later = vi.fn();
+    http.interceptors.error.use((err, ctx) => (ctx.attempt === 1 ? ctx.retry() : undefined), {
+      priority: 1,
+    });
+    http.interceptors.error.use((err, ctx) => later(ctx.attempt, err.status), { priority: 2 });
+    const err = await http.get('/v1/a').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(503);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    // attempt 1 retried before `later` was reached; attempt 2 ran `later` exactly once
+    expect(later.mock.calls).toEqual([[2, 503]]);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry.mock.calls[0][1]).toBe(0);
+    expect(seen.map((e) => e.type)).toEqual([
+      'http:request',
+      'http:retry',
+      'http:request',
+      'http:error',
+    ]);
+    expect(seen[1]).toMatchObject({ attempt: 2, delayMs: 0 });
+    expect(seen[1].error).toBeInstanceOf(ApiError);
+    expect(seen.at(-1)).toMatchObject({ attempts: 2, status: 503 });
+    expect(seen.at(-1).error).toBe(err);
+  });
+
+  it('ctx.retry() from a response interceptor runs the pipeline once more; the outer stage does not re-process the result', async () => {
+    const fetch = sequenceFetch(
+      json({ data: { stale: true }, meta: { stale: true } }),
+      json({ data: { fresh: true } })
+    );
+    const { http, events } = make({ fetch });
+    const seen = recordEvents(events);
+    const unwrap = vi.fn((res) => ({ ...res, data: res.data.data }));
+    http.interceptors.response.use(unwrap, { priority: 10 });
+    http.interceptors.response.use(
+      (res, ctx) => (res.data.stale && ctx.attempt === 1 ? ctx.retry() : undefined),
+      { priority: 20 }
+    );
+    const res = await http.get('/v1/a');
+    expect(res.data).toEqual({ fresh: true }); // unwrapped exactly once
+    expect(res.attempts).toBe(2);
+    expect(unwrap).toHaveBeenCalledTimes(2); // once per attempt
+    expect(seen.map((e) => e.type)).toEqual([
+      'http:request',
+      'http:retry',
+      'http:request',
       'http:response',
     ]);
   });
@@ -713,6 +800,37 @@ describe('error mapping', () => {
       globalThis.fetch = original;
     }
   });
+
+  it('a TypeError thrown by an interceptor is a programming error: SdkError, not NetworkError, not retried', async () => {
+    const fetch = sequenceFetch(json({}));
+    const { http, events } = make({ fetch, retries: 2, backoff: { baseMs: 0 } });
+    const seen = recordEvents(events);
+    http.interceptors.response.use(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'data')");
+    });
+    const err = await http.get('/v1/a').catch((e) => e);
+    expect(err).toBeInstanceOf(SdkError);
+    expect(err).not.toBeInstanceOf(NetworkError);
+    expect(err.cause).toBeInstanceOf(TypeError);
+    expect(err.requestId).toMatch(/^req_/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(seen.map((e) => e.type)).toEqual(['http:request', 'http:error']);
+  });
+
+  it('a body that dies mid-read is a NetworkError and is retried like any transport failure', async () => {
+    const fetch = sequenceFetch(
+      () =>
+        new Response(chunkStream(['{"partial":'], { error: new TypeError('terminated') }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      json({ whole: true })
+    );
+    const { http } = make({ fetch, retries: 1, backoff: { baseMs: 0 } });
+    const res = await http.get('/v1/a');
+    expect(res.data).toEqual({ whole: true });
+    expect(res.attempts).toBe(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ── timeout ──────────────────────────────────────────────────────────────────────────────────────
@@ -759,6 +877,19 @@ describe('timeout', () => {
     expect(http.inflight('z')).toBe(1);
     http.abort('z');
     await expect(p).rejects.toBeInstanceOf(AbortError);
+  });
+
+  it('after a timed-out attempt, error interceptors see the live request-level ctx.signal, not the fired timeout', async () => {
+    const fetch = hangingFetch();
+    const { http } = make({ fetch, retries: 0, timeoutMs: 100 });
+    const seen = [];
+    http.interceptors.error.use((err, ctx) => {
+      seen.push([err.name, ctx.signal.aborted]);
+    });
+    const settled = http.get('/slow').catch((e) => e);
+    await tick(100);
+    expect(await settled).toBeInstanceOf(TimeoutError);
+    expect(seen).toEqual([['TimeoutError', false]]);
   });
 });
 
@@ -1030,6 +1161,37 @@ describe('abort', () => {
     }
   });
 
+  it('an abort while an error interceptor is running rejects with AbortError (http:abort, not http:error)', async () => {
+    const fetch = sequenceFetch(problem(500, { title: 'boom' }));
+    const { http, events } = make({ fetch, retries: 2 });
+    const seen = recordEvents(events);
+    const onAbort = vi.fn();
+    const onError = vi.fn();
+    http.hooks.on('onAbort', onAbort);
+    http.hooks.on('onError', onError);
+    let release;
+    http.interceptors.error.use(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    const settled = http.get('/v1/a', { tag: 't' }).catch((e) => e);
+    await settle();
+    expect(typeof release).toBe('function');
+    expect(http.abort('t', 'navigated')).toBe(1);
+    // even a recovery produced after the abort does not outrun it
+    release({ data: { recovered: true }, status: 200 });
+    const err = await settled;
+    expect(err).toBeInstanceOf(AbortError);
+    expect(err.reason).toBe('navigated');
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(seen.map((e) => e.type)).toEqual(['http:request', 'http:abort']);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(http.inflight()).toBe(0);
+  });
+
   it('destroy() aborts everything, drops interceptors and hooks, and later requests reject', async () => {
     const fetch = hangingFetch();
     const { http } = make({ fetch });
@@ -1115,6 +1277,35 @@ describe('dedupe', () => {
     expect(await follower2).toBeInstanceOf(AbortError);
     expect(http.inflight()).toBe(0);
   });
+
+  it('a leader whose retry changed the URL still serves its followers and releases its key (no later hang)', async () => {
+    const fetch = sequenceFetch(problem(503, { title: 'busy' }), json({ ok: true }));
+    const { http } = make({ fetch, retries: 0 });
+    http.interceptors.error.use((err, ctx) =>
+      ctx.attempt === 1 ? ctx.retry({ spec: { ...ctx.spec, path: '/v1/mirror' } }) : undefined
+    );
+    const leader = http.get('/v1/a');
+    const follower = http.get('/v1/a');
+    const [r1, r2] = await Promise.all([leader, follower]);
+    expect(r1.data).toEqual({ ok: true });
+    expect(r2.data).toEqual({ ok: true });
+    expect(r2.meta.deduped).toBe(true);
+    expect(r2.headers).not.toBe(r1.headers); // followers get their own Headers
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0]).toBe(`${BASE}/v1/mirror`);
+    // the registry is clean: a later identical GET fetches instead of waiting behind a dead leader
+    let timer;
+    const later = await Promise.race([
+      http.get('/v1/a'),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('later GET hung behind a leaked key')), 2000);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    expect(later.fromCache).toBe(false);
+    expect(later.meta.deduped).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(http.inflight()).toBe(0);
+  });
 });
 
 // ── cache ────────────────────────────────────────────────────────────────────────────────────────
@@ -1189,6 +1380,34 @@ describe('cache', () => {
     expect((await http.get('/v1/a', { cache: { ttlMs: 100 } })).fromCache).toBe(false);
     http.cache.clear();
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys non-GET entries by body too (key-order independent); unkeyable bodies need an explicit key', async () => {
+    const fetch = sequenceFetch(json({ v: 1 }), json({ v: 2 }), json({ v: 3 }), json({ v: 4 }));
+    const { http, storage } = make({ fetch });
+    const cache = { ttlMs: 5000 };
+    const a = await http.post('/v1/search', { q: 'DEL', d: '2026-12-01' }, { cache });
+    const b = await http.post('/v1/search', { q: 'BOM', d: '2026-12-01' }, { cache });
+    expect(a.data).toEqual({ v: 1 });
+    expect(b.data).toEqual({ v: 2 });
+    expect(b.fromCache).toBe(false);
+    const again = await http.post('/v1/search', { d: '2026-12-01', q: 'DEL' }, { cache });
+    expect(again.fromCache).toBe(true);
+    expect(again.data).toEqual({ v: 1 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(storage.keys('cache:')).toHaveLength(2);
+    // multipart bodies cannot be keyed: nothing is stored or served without a custom key
+    const fd = new FormData();
+    fd.append('a', '1');
+    await http.post('/v1/up', fd, { cache });
+    expect(storage.keys('cache:')).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await http.post('/v1/up', fd, { cache: { ttlMs: 5000, key: 'up:a' } });
+    expect(storage.keys('cache:')).toHaveLength(3);
+    expect((await http.post('/v1/up', fd, { cache: { ttlMs: 5000, key: 'up:a' } })).fromCache).toBe(
+      true
+    );
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -1435,6 +1654,130 @@ describe('stream', () => {
       expect(fetch).toHaveBeenCalledTimes(3);
       expect(await result).toBeInstanceOf(NetworkError);
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a connection that delivers events resets the reconnect budget and backoff (maxReconnects is consecutive)', async () => {
+    vi.useFakeTimers();
+    try {
+      const dropped = () => new TypeError('terminated'); // what undici throws when a body dies
+      const fetch = sequenceFetch(
+        networkError(),
+        () => sse(['data: {"n":1}\n\n'], { error: dropped() }),
+        () => sse(['data: {"n":2}\n\n'], { error: dropped() }),
+        networkError()
+      );
+      const { http } = make({ fetch, random: () => 0, timeoutMs: 0 });
+      const s = http.stream('/v1/live', { maxReconnects: 1, reconnectBaseMs: 1000 });
+      const got = [];
+      const outcome = (async () => {
+        for await (const ev of s) got.push(ev.data);
+      })().catch((e) => e);
+      await settle();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await tick(500); // 1000 * 0.5: the single reconnect of the budget
+      await settle();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(got).toEqual([{ n: 1 }]);
+      // that connection delivered → budget and backoff restart (same 500 ms, not 1000)
+      await tick(500);
+      await settle();
+      expect(fetch).toHaveBeenCalledTimes(3);
+      expect(got).toEqual([{ n: 1 }, { n: 2 }]);
+      await tick(500);
+      await settle();
+      expect(fetch).toHaveBeenCalledTimes(4);
+      // a failure without any progress exhausts the budget of 1
+      expect(await outcome).toBeInstanceOf(NetworkError);
+      expect(s.closed).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('answers concurrent next() calls in order', async () => {
+    let controller;
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              controller = c;
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
+    );
+    const { http } = make({ fetch, timeoutMs: 0 });
+    const s = http.stream('/v1/live', { reconnect: false });
+    const first = s.next();
+    const second = s.next();
+    const third = s.next();
+    await settle();
+    controller.enqueue(new TextEncoder().encode('data: 1\n\ndata: 2\n\n'));
+    expect((await first).value.data).toBe(1);
+    expect((await second).value.data).toBe(2);
+    controller.close();
+    await expect(third).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it('abort(tag) / abortAll() close open streams by tag (counted once) and end their iteration', async () => {
+    let controller;
+    const fetch = vi.fn(async (_url, init) => {
+      const body = new ReadableStream({
+        start(c) {
+          controller = c;
+          c.enqueue(new TextEncoder().encode('data: {"a":1}\n\n'));
+        },
+      });
+      init.signal.addEventListener('abort', () => controller.error(init.signal.reason), {
+        once: true,
+      });
+      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    });
+    const { http } = make({ fetch, timeoutMs: 0 });
+    const s = http.stream('/v1/live', { tag: 'live' });
+    expect((await s.next()).value.data).toEqual({ a: 1 });
+    expect(http.inflight()).toBe(0); // headers arrived: the stream is no longer an in-flight request
+    const pending = s.next();
+    expect(http.abort('other')).toBe(0);
+    expect(s.closed).toBe(false);
+    expect(http.abort('live')).toBe(1);
+    expect(s.closed).toBe(true);
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    await expect(s.next()).resolves.toEqual({ done: true, value: undefined });
+    // a stream still opening its connection is counted once, through its in-flight request
+    const hang = hangingFetch();
+    http.setFetch(hang);
+    const s2 = http.stream('/v1/live2', { tag: 'x' });
+    const pending2 = s2.next();
+    await settle();
+    expect(http.inflight('x')).toBe(1);
+    expect(http.abortAll()).toBe(1);
+    await expect(pending2).resolves.toEqual({ done: true, value: undefined });
+    expect(s2.closed).toBe(true);
+    expect(http.inflight()).toBe(0);
+  });
+
+  it('destroy() closes open streams and clears their reconnect timers', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = sequenceFetch(networkError());
+      const { http } = make({ fetch, random: () => 0 });
+      const s = http.stream('/v1/live', { reconnectBaseMs: 60000 });
+      const pending = s.next();
+      await settle();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1); // the reconnect wait
+      http.destroy();
+      await expect(pending).resolves.toEqual({ done: true, value: undefined });
+      expect(s.closed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      await tick(60000);
+      expect(fetch).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

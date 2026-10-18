@@ -550,7 +550,7 @@ export const en = deepFreeze({
       morning: '6:00 – 12:00',
       afternoon: '12:00 – 18:00',
       evening: '18:00 – 24:00',
-      night: 'After 18:00',
+      night: 'Before 6:00',
     },
     sortKeys: {
       label: 'Sort by',
@@ -729,7 +729,7 @@ export const en = deepFreeze({
     overnight: 'Overnight',
     selfTransfer: 'Self-transfer',
     airportChange: 'Airport change',
-    layover: '{duration} layover in {airport}',
+    layover: '{duration} in {airport}',
     operatedBy: 'Operated by {airline}',
     seatsLeft: '{count, plural, one{Only # seat left} other{# seats left}}',
     outbound: 'Outbound',
@@ -873,7 +873,10 @@ export const en = deepFreeze({
   // ── validation: field‑level messages (params come from ValidationIssue.params) ──────────────
   validation: {
     required: 'This field is required',
+    invalid: 'Please enter a valid value',
+    type: 'Please enter a valid value',
     pattern: 'Please enter a valid value',
+    enum: 'Please choose one of the available options',
     min: 'Must be at least {min}',
     max: 'Must be at most {max}',
     minLength: 'Must be at least {min, plural, one{# character} other{# characters}}',

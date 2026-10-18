@@ -181,8 +181,13 @@ describe('store.registerSlice', () => {
     const store = createStore();
     expect(() => store.registerSlice('', { initial: {} })).toThrow(ValidationError);
     expect(() => store.registerSlice('a.b', { initial: {} })).toThrow(ValidationError);
+    expect(() => store.registerSlice('a[0]', { initial: {} })).toThrow(ValidationError);
     expect(() => store.registerSlice('__proto__', { initial: {} })).toThrow(ValidationError);
+    expect(() => store.registerSlice('constructor', { initial: {} })).toThrow(ValidationError);
+    expect(() => store.registerSlice('toString', { initial: {} })).toThrow(ValidationError);
+    expect(() => store.registerSlice('hasOwnProperty', { initial: {} })).toThrow(ValidationError);
     expect(() => store.registerSlice(42, { initial: {} })).toThrow(ValidationError);
+    expect(String(store.getState())).toBe('[object Object]'); // nothing shadowed on the root
     expect(() => store.registerSlice('x')).toThrow(ConfigError);
     expect(() => store.registerSlice('x', {})).toThrow(ConfigError);
     expect(() => store.registerSlice('x', { initial: {}, persist: 'local' })).toThrow(ConfigError);
@@ -255,6 +260,9 @@ describe('store.set', () => {
     expect(() => store.set('search', 'loading')).toThrow(ValidationError);
     expect(() => store.set('search', null)).toThrow(ValidationError);
     expect(() => store.set('search', { status: 'x' }, 'meta')).toThrow(ValidationError);
+    const updater = vi.fn((s) => ({ ...s, status: 'x' }));
+    expect(() => store.set('search', updater, null)).toThrow(ValidationError);
+    expect(updater).not.toHaveBeenCalled(); // meta is checked before the updater runs
     let caught;
     try {
       store.set('search', (s) => {
@@ -293,6 +301,28 @@ describe('store.set', () => {
     store.set('count', (n) => n + 1);
     expect(store.get('count')).toBe(1);
     expect(() => store.set('count', (n) => n)).not.toThrow();
+  });
+
+  it('a partial carrying an own __proto__ key (parsed JSON) never pollutes prototypes', () => {
+    const { store } = makeStore();
+    store.set('search', JSON.parse('{"status": "complete", "__proto__": {"polluted": true}}'));
+    expect(store.get('search.status')).toBe('complete');
+    expect({}.polluted).toBeUndefined();
+    expect(store.getState().search.polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(store.getState().search)).toBe(Object.prototype);
+    expect(store.get('search.__proto__.polluted')).toBeUndefined();
+  });
+
+  it('a throwing middleware propagates to the caller and leaves the state untouched', () => {
+    const { store } = makeStore();
+    const before = store.getState();
+    store.use((ctx) => {
+      if (ctx.action === 'search/forbidden') throw new ValidationError('rejected by policy');
+    });
+    expect(() => store.set('search', { status: 'x' }, { action: 'search/forbidden' })).toThrow(
+      ValidationError
+    );
+    expect(store.getState()).toBe(before);
   });
 });
 
@@ -474,6 +504,42 @@ describe('subscribe(selector, listener, options)', () => {
     store.set('search', { status: 'complete' });
     await tick();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing equality is reported through the error event, never thrown from the microtask', async () => {
+    const events = fakeEvents();
+    const { store } = makeStore({ events });
+    const healthy = vi.fn();
+    store.subscribe((s) => s.search.status, vi.fn(), {
+      equality: () => {
+        throw new Error('equality failed');
+      },
+    });
+    store.subscribe((s) => s.search.status, healthy);
+    store.set('search', { status: 'loading' });
+    await tick();
+    expect(healthy).toHaveBeenCalledWith('loading', 'idle');
+    const errors = events.calls.filter((c) => c.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload.error).toBeInstanceOf(SdkError);
+    expect(errors[0].payload.error.message).toMatch(/equality failed/);
+  });
+
+  it('batches through Promise.resolve() when queueMicrotask is unavailable (older runtimes)', async () => {
+    vi.stubGlobal('queueMicrotask', undefined);
+    try {
+      const { store } = makeStore();
+      const listener = vi.fn();
+      store.subscribe(listener);
+      store.set('search', { status: 'loading' });
+      store.set('prefs', { currency: 'USD' });
+      expect(listener).not.toHaveBeenCalled();
+      await tick();
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][2].slices).toEqual(['search', 'prefs']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -680,6 +746,22 @@ describe('state:change events', () => {
     ]);
   });
 
+  it('emits state:change for reset and restore too, after their batch', async () => {
+    const events = fakeEvents();
+    const { store } = makeStore({ events });
+    store.set('prefs', { currency: 'USD' });
+    await tick();
+    events.calls.length = 0;
+    store.reset('prefs');
+    store.restore({ slices: { search: { status: 'complete' } } });
+    expect(events.calls).toHaveLength(0);
+    await tick();
+    expect(events.calls).toEqual([
+      { type: 'state:change', payload: { slice: 'prefs', action: '@@reset' } },
+      { type: 'state:change', payload: { slice: 'search', action: '@@restore' } },
+    ]);
+  });
+
   it('survives an emitter that throws', async () => {
     const events = {
       emit: () => {
@@ -876,12 +958,26 @@ describe('persistence', () => {
     expect(logger.warn).toHaveBeenCalledTimes(3);
   });
 
-  it('ignores corrupt stored data for a picked slice', () => {
+  it('drops stored data that does not match the shape of the slice (picked or whole)', () => {
+    const logger = fakeLogger();
     const storage = createStorage({ driver: 'memory' });
     storage.set('state:prefs', { v: 1, d: 'garbage' });
-    const store = createStore({ storage });
+    storage.set('state:search', { v: 1, d: ['not', 'an', 'object'] });
+    storage.set('state:list', { v: 1, d: { 0: 'object instead of array' } });
+    storage.set('state:count', { v: 1, d: 7 });
+    const store = createStore({ storage, logger });
     store.registerSlice('prefs', { initial: PREFS_INITIAL, persist: { pick: ['currency'] } });
+    store.registerSlice('search', { initial: SEARCH_INITIAL, persist: true });
+    store.registerSlice('list', { initial: [], persist: true });
+    store.registerSlice('count', { initial: 0, persist: true });
+    // a tampered localStorage entry can never turn an object slice into a string or an array
     expect(store.getState().prefs).toBe(PREFS_INITIAL);
+    expect(store.getState().search).toBe(SEARCH_INITIAL);
+    expect(store.getState().list).toEqual([]);
+    expect(store.getState().count).toBe(7); // primitive slices accept any stored value
+    expect(storage.keys().sort()).toEqual(['state:count']);
+    expect(logger.warn).toHaveBeenCalledTimes(3);
+    expect(logger.warn.mock.calls[0][0]).toMatch(/shape of the slice/);
   });
 
   it('persist.flush writes now, persist.hydrate re-reads, persist.clear removes', async () => {
@@ -911,8 +1007,33 @@ describe('persistence', () => {
     expect(store.get('prefs.currency')).toBe('AED');
     await expect(store.persist.hydrate()).resolves.toBeUndefined();
     store.persist.clear();
-    expect(() => store.persist.hydrate('nope')).toThrow(ValidationError);
+    // Promise-returning members reject (never throw synchronously), so `.catch()` always works.
+    await expect(store.persist.hydrate('nope')).rejects.toThrow(ValidationError);
     expect(() => store.persist.clear('nope')).toThrow(ValidationError);
+  });
+
+  it('persist.hydrate keeps a pending write when nothing (valid) is stored', async () => {
+    const storage = createStorage({ driver: 'memory' });
+    const store = createStore({ storage, persist: { debounceMs: 1000 } });
+    store.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true });
+    store.set('prefs', { currency: 'EUR' });
+    await tick();
+    expect(vi.getTimerCount()).toBe(1);
+    await store.persist.hydrate('prefs'); // nothing stored: the local change must not be lost
+    expect(vi.getTimerCount()).toBe(1);
+    expect(store.get('prefs.currency')).toBe('EUR');
+    await vi.runAllTimersAsync();
+    expect(storage.get('state:prefs').d.currency).toBe('EUR');
+
+    // a stored copy of an incompatible shape is dropped and the pending write goes through too
+    store.set('prefs', { currency: 'GBP' });
+    await tick();
+    storage.set('state:prefs', { v: 1, d: 'garbage' });
+    await store.persist.hydrate('prefs');
+    expect(store.get('prefs.currency')).toBe('GBP');
+    expect(storage.get('state:prefs')).toBeUndefined();
+    await vi.runAllTimersAsync();
+    expect(storage.get('state:prefs').d.currency).toBe('GBP');
   });
 
   it('routes each kind to the storage factory and caches the result per kind', async () => {
@@ -959,11 +1080,67 @@ describe('persistence', () => {
     expect(store.get('ui.busy')).toEqual({});
   });
 
-  it('rejects a factory that does not return a Storage', () => {
-    const store = createStore({ storage: () => ({}) });
-    expect(() => store.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true })).toThrow(
+  it('rejects a broken storage factory at registration, leaving no half-registered slice', () => {
+    const junk = createStore({ storage: () => ({}) });
+    expect(() => junk.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true })).toThrow(
       ConfigError
     );
+    expect(junk.hasSlice('prefs')).toBe(false);
+    expect(junk.getState()).toEqual({});
+
+    const throwing = createStore({
+      storage: () => {
+        throw new TypeError('no storage here');
+      },
+    });
+    let caught;
+    try {
+      throwing.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ConfigError);
+    expect(caught.cause).toBeInstanceOf(TypeError);
+    expect(throwing.hasSlice('prefs')).toBe(false);
+    // non-persisted slices never touch the factory
+    expect(() => throwing.registerSlice('ui', { initial: { busy: {} } })).not.toThrow();
+  });
+
+  it('rejects persist.pick paths that could reach the prototype', () => {
+    const store = createStore({ storage: createStorage({ driver: 'memory' }) });
+    for (const pick of [
+      ['__proto__.polluted'],
+      ['a.constructor.prototype'],
+      ['history', 'prototype'],
+    ]) {
+      expect(() => store.registerSlice('x', { initial: {}, persist: { pick } })).toThrow(
+        ConfigError
+      );
+      expect(store.hasSlice('x')).toBe(false);
+    }
+    expect(() =>
+      store.registerSlice('x', { initial: {}, persist: { pick: ['current.id', 'history[0]'] } })
+    ).not.toThrow();
+  });
+
+  it('logs an injected setTimeout that throws and still notifies listeners', async () => {
+    const logger = fakeLogger();
+    const timers = {
+      setTimeout: () => {
+        throw new Error('scheduler down');
+      },
+      clearTimeout: vi.fn(),
+    };
+    const store = createStore({ storage: createStorage({ driver: 'memory' }), logger, timers });
+    store.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true });
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.set('prefs', { currency: 'USD' });
+    await tick();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][0]).toMatch(/could not schedule/);
+    expect(logger.warn.mock.calls[0][1].error).toBeInstanceOf(SdkError);
   });
 
   it('persist: false disables persistence for every slice', async () => {
@@ -1001,6 +1178,7 @@ describe('persistence', () => {
     expect(store.get('prefs.cyclic')).toBe(cyclic);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls[0][0]).toMatch(/could not persist/);
+    expect(logger.warn.mock.calls[0][1].error).toBeInstanceOf(SdkError);
   });
 
   it('a read failure during hydration is logged and the initial state is kept', () => {
@@ -1111,6 +1289,58 @@ describe('store.snapshot / store.restore', () => {
     b.restore(JSON.parse(JSON.stringify(a.snapshot())));
     expect(b.getState()).toEqual(a.getState());
   });
+
+  it('never aliases the snapshot: mutating it afterwards leaves the state alone', () => {
+    const { store } = makeStore();
+    const snap = {
+      slices: {
+        search: { status: 'complete', offers: { byId: { a: { id: 'a' } }, allIds: ['a'] } },
+        later: { items: [{ id: 1 }] },
+      },
+    };
+    store.restore(snap);
+    snap.slices.search.offers.allIds.push('injected');
+    snap.slices.search.offers.byId.a.id = 'tampered';
+    snap.slices.later.items[0].id = 99;
+    expect(store.get('search.offers.allIds')).toEqual(['a']);
+    expect(store.get('search.offers.byId.a.id')).toBe('a');
+    store.registerSlice('later', { initial: { items: [] } });
+    expect(store.get('later.items')).toEqual([{ id: 1 }]);
+  });
+
+  it('ignores snapshot slices of another shape or with unusable names (with a warning)', async () => {
+    const logger = fakeLogger();
+    const { store } = makeStore({ logger });
+    store.registerSlice('list', { initial: [] });
+    store.registerSlice('count', { initial: 0 });
+    await tick();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.restore({
+      slices: {
+        search: 'not an object',
+        prefs: ['not', 'an', 'object'],
+        list: { 0: 'not an array' },
+        count: 5,
+        'a.b': { x: 1 },
+        toString: { x: 1 },
+        later: 'string for a future object slice',
+      },
+    });
+    expect(store.getState().search).toBe(SEARCH_INITIAL);
+    expect(store.getState().prefs).toBe(PREFS_INITIAL);
+    expect(store.getState().list).toEqual([]);
+    expect(store.getState().count).toBe(5);
+    expect(store.getState()).not.toHaveProperty('a.b');
+    expect(store.getState().toString).toBe(Object.prototype.toString);
+    expect(logger.warn).toHaveBeenCalledTimes(5);
+    store.registerSlice('later', { initial: { ready: false } });
+    expect(store.getState().later).toEqual({ ready: false });
+    expect(logger.warn).toHaveBeenCalledTimes(6);
+    await tick();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0][2].actions).toEqual(['@@restore', '@@init']);
+  });
 });
 
 // ── interop: getSnapshot / toObservable ──────────────────────────────────────────────────────────
@@ -1148,7 +1378,42 @@ describe('store.toObservable', () => {
     expect(next).toHaveBeenCalledTimes(2);
     expect(next).toHaveBeenLastCalledWith(store.getState());
     expect(() => store.toObservable().subscribe()).toThrow(ValidationError);
+    expect(() => store.toObservable().subscribe('next')).toThrow(ValidationError);
     expect(() => store.toObservable('x')).toThrow(ValidationError);
+  });
+
+  it('accepts the positional (next, error, complete) form of the TC39 contract', async () => {
+    const { store } = makeStore();
+    const next = vi.fn();
+    const error = vi.fn();
+    const complete = vi.fn();
+    const sub = store.toObservable((s) => s.prefs.currency).subscribe(next, error, complete);
+    expect(next).toHaveBeenCalledWith('INR');
+    store.set('prefs', { currency: 'USD' });
+    await tick();
+    expect(next).toHaveBeenLastCalledWith('USD');
+    expect(sub.closed).toBe(false);
+    // error / complete only: a Svelte-style `subscribe(run, invalidate)` or `(undefined, err)` is fine
+    const onlyComplete = store.toObservable().subscribe(undefined, undefined, complete);
+    expect(onlyComplete.closed).toBe(false);
+    store.destroy();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('reports a next handler that throws on the initial emission instead of throwing back', () => {
+    const events = fakeEvents();
+    const { store } = makeStore({ events });
+    let sub;
+    expect(() => {
+      sub = store.toObservable().subscribe(() => {
+        throw new Error('render failed');
+      });
+    }).not.toThrow();
+    expect(sub.closed).toBe(false);
+    const errors = events.calls.filter((c) => c.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload.error.message).toMatch(/render failed/);
   });
 
   it('is interoperable: @@observable and Symbol.observable return the observable itself', () => {
@@ -1298,6 +1563,26 @@ describe('store.destroy', () => {
     store.set('prefs', { currency: 'AED' });
     await tick();
     expect(plain).not.toHaveBeenCalled();
+    // batch / reset / restore keep working as plain state updates
+    store.batch(() => {
+      store.set('prefs', { currency: 'JPY' });
+      store.reset('search');
+    });
+    store.restore({ slices: { prefs: { currency: 'CHF' } } });
+    expect(store.get('prefs.currency')).toBe('CHF');
+    expect(events.calls).toEqual([]);
+  });
+
+  it('does not write a slice changed after destroy, even through persist.flush()', async () => {
+    const storage = createStorage({ driver: 'memory' });
+    const store = createStore({ storage, persist: { debounceMs: 0 } });
+    store.registerSlice('prefs', { initial: PREFS_INITIAL, persist: true });
+    store.set('prefs', { currency: 'USD' });
+    store.destroy();
+    expect(storage.get('state:prefs').d.currency).toBe('USD');
+    store.set('prefs', { currency: 'EUR' });
+    await store.persist.flush();
+    expect(storage.get('state:prefs').d.currency).toBe('USD');
   });
 });
 

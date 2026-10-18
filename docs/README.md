@@ -179,7 +179,7 @@ Persistence defaults: `session` (refresh token only when `auth.strategy = 'beare
 | namespace | events |
 |---|---|
 | http | `http:request`, `http:response`, `http:error`, `http:retry`, `http:abort` |
-| auth | `auth:login`, `auth:logout`, `auth:refreshed`, `auth:expired`, `auth:guest`, `auth:mfaRequired`, `auth:required`, `auth:claimSent`, `auth:claimed` |
+| auth | `auth:login`, `auth:logout`, `auth:refreshed`, `auth:expired`, `auth:guest`, `auth:mfaRequired`, `auth:required`, `auth:claimSent`, `auth:claimed`, `access:change` |
 | client | `client:ready`, `client:destroyed`, `bootstrap:loaded`, `prefs:change`, `features:change` |
 | search | `search:start`, `search:results`, `search:complete`, `search:error`, `search:cancelled`, `search:expiring`, `search:expired`, `search:filtersChange`, `search:sortChange` |
 | offer | `offer:selected`, `offer:deselected`, `offer:priceChanged`, `offer:expired`, `offer:unavailable`, `offer:fareFamilyChanged` |

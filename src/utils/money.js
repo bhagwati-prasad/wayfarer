@@ -197,8 +197,12 @@ const CODE_SUFFIX_RE = /^((?:[\s\S]*[^A-Za-z])?)\s*([A-Za-z]{3})$/;
 const LEADING_UNIT_RE = /^[^\d+-]*?(?=[+-]?(?:\d|\.\d))/;
 /** Anything after the last digit or decimal point: ` ₹`, ` Rs`, … */
 const TRAILING_UNIT_RE = /[^\d.]*$/;
-/** Digits with group separators, then an optional fraction. */
-const LOOSE_CORE_RE = /^(\d[\d,\s']*)?(?:\.(\d*))?$/;
+/** Digits with group separators (`,`, space, `'`, `’`), then an optional fraction. */
+const LOOSE_CORE_RE = /^(\d[\d,\s'\u2019]*)?(?:\.(\d*))?$/;
+/** Group separators other than the comma, normalised to a comma before the grouping check. */
+const OTHER_SEPARATOR_RE = /\s+|['\u2019]/g;
+/** The Indian "no paise" marker (`500/-`): a slash‑hyphen after the number is not a minus sign. */
+const NO_PAISE_RE = /\/-/g;
 
 const DISPLAYS = Object.freeze({ symbol: 'symbol', code: 'code', narrow: 'narrowSymbol' });
 const SIGN_DISPLAYS = Object.freeze(['auto', 'never', 'always', 'exceptZero', 'negative']);
@@ -350,6 +354,17 @@ function divRound(num, den) {
   return q;
 }
 
+/**
+ * Re‑scale minor units from `from` to `to` fraction digits, rounding half away from zero when
+ * precision is dropped (the result is a bigint, so it can never be a negative zero).
+ * @param {bigint} minor @param {number} from @param {number} to @returns {bigint}
+ */
+function rescale(minor, from, to) {
+  if (to > from) return minor * pow10(to - from);
+  if (to < from) return divRound(minor, pow10(from - to));
+  return minor;
+}
+
 /** @param {bigint} minor @param {string} currency @param {number} decimals @returns {Money} */
 function make(minor, currency, decimals) {
   return { amount: unscale(minor, decimals), currency };
@@ -431,9 +446,11 @@ export function money(amount, currency) {
  * `"(₹1,234.50)"` (symbol, sign or accounting parentheses — only with `opts.currency`),
  * `{ amount, currency }` objects (amount string, number or bigint), bare numbers / bigints with
  * `opts.currency`, and integer minor units (`123450` → `"1234.50"`) when `opts.minor` is set.
- * `.` is the decimal separator; `,` and spaces are group separators (Western and Indian grouping);
- * a comma used as a decimal separator is rejected when detectable instead of being misread. A code
- * found in the input must agree with `opts.currency`.
+ * `.` is the decimal separator; `,`, spaces, `'` and `’` are group separators (Western and
+ * Indian grouping, validated — `"1,50"` / `"12 34"` are rejected instead of being misread). A
+ * trailing minus (`"500-"`) is the sign; the Indian "no paise" marker (`"500/-"`) is not. A code
+ * found in the input must agree with `opts.currency`, and two different codes in one string
+ * (`"USD 100 INR"`) are a `currency_mismatch`.
  * @param {string|number|bigint|{ amount: string|number|bigint, currency?: string }} input
  * @param {ParseMoneyOptions} [opts]
  * @returns {Money}
@@ -501,6 +518,13 @@ function parseMoneyString(s, currency, minor, path) {
   if (m) {
     code = m[1].toUpperCase();
     t = m[2];
+    // a second code after the number must agree with the first (`USD 100 INR` is not an amount)
+    const tail = CODE_SUFFIX_RE.exec(t);
+    if (tail) {
+      const suffix = tail[2].toUpperCase();
+      if (suffix !== code) throw mismatch(path, code, suffix);
+      t = tail[1];
+    }
   } else if ((m = CODE_SUFFIX_RE.exec(t))) {
     code = m[2].toUpperCase();
     t = m[1];
@@ -550,12 +574,22 @@ function parseLoose(text, path) {
   const lead = LEADING_UNIT_RE.exec(t);
   if (lead) t = t.slice(lead[0].length);
   takeSign();
-  t = t.replace(TRAILING_UNIT_RE, '');
+  // Whatever trails the number is a unit (`1,234.50 ₹`) or a trailing sign (`500-`); `500/-` is the
+  // Indian "no paise" marker, not a sign.
+  const trail = /** @type {RegExpExecArray} */ (TRAILING_UNIT_RE.exec(t))[0];
+  t = t.slice(0, t.length - trail.length);
+  const trailingSigns = trail.replace(NO_PAISE_RE, '').match(/[+-]/g) || [];
+  if (trailingSigns.length > 0) {
+    if (signed || trailingSigns.length > 1) throw fail('more than one sign');
+    signed = true;
+    if (trailingSigns[0] === '-') neg = !neg;
+  }
   const m = LOOSE_CORE_RE.exec(t);
   if (!m || (!m[1] && !m[2])) throw fail('expected digits with "." as the decimal separator');
   let int = '0';
   if (m[1]) {
-    const compact = m[1].replace(/[\s']/g, '');
+    // every separator must leave well-formed Western (3) or Indian (2,2,...,3) groups
+    const compact = m[1].replace(OTHER_SEPARATOR_RE, ',');
     if (compact.includes(',')) {
       const chunks = compact.split(',');
       const last = chunks.length - 1;
@@ -794,7 +828,7 @@ export function allocate(m, ratios) {
       }
       return parseDecimal(r, `ratios[${i}]`);
     });
-    const places = Math.max(...parsed.map((p) => p.frac.length));
+    const places = parsed.reduce((n, p) => (p.frac.length > n ? p.frac.length : n), 0);
     weights = parsed.map((p) => BigInt(p.int + p.frac.padEnd(places, '0')));
   } else {
     throw invalid('allocate() expects a non-empty array of ratios or a positive integer count', [
@@ -842,37 +876,69 @@ function toRational(v, path) {
 }
 
 /**
- * Rate `from → to` from a rates table: a pair key (`USDINR`, `USD_INR`, `USD/INR`, `USD-INR`, or the
- * reverse pair inverted), a nested `rates[from][to]`, or a flat table relative to one base currency
- * where a missing side counts as the base (rate 1).
+ * Own property of a table, or `undefined` — inherited (or prototype‑polluted) keys are never rates.
+ * @param {Record<string, unknown>} table @param {string} key @returns {unknown}
+ */
+function own(table, key) {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+/**
+ * Whether a rate value is exactly 1 (`1`, `1n`, `"1.00"`).
+ * @param {unknown} v @returns {boolean}
+ */
+function isUnitRate(v) {
+  if (typeof v === 'number') return v === 1;
+  if (typeof v === 'bigint') return v === 1n;
+  return typeof v === 'string' && /^\+?0*1(?:\.0*)?$/.test(v.trim());
+}
+
+/**
+ * Whether a flat table lists its base currency explicitly (some currency code at rate 1).
+ * @param {Record<string, unknown>} rates @returns {boolean}
+ */
+function hasExplicitBase(rates) {
+  return Object.keys(rates).some((k) => CURRENCY_RE.test(k) && isUnitRate(rates[k]));
+}
+
+/**
+ * Rate `from → to` from a rates table: a pair key (`USDINR`, `USD_INR`, `USD/INR`, `USD-INR`, or
+ * the reverse pair inverted), a nested `rates[from][to]`, or a flat table relative to one base
+ * currency. In a flat table one side may be missing only as the omitted base (rate 1); when some
+ * listed currency already has rate 1 the base is explicit, so an unlisted currency is unknown
+ * rather than the base.
  * @param {Record<string, unknown>} rates @param {string} from @param {string} to
  * @returns {{ num: bigint, den: bigint }}
  */
 function findRate(rates, from, to) {
   for (const sep of ['', '_', '/', '-']) {
-    const direct = rates[`${from}${sep}${to}`];
+    const direct = own(rates, `${from}${sep}${to}`);
     if (direct !== undefined && direct !== null)
       return toRational(direct, `rates.${from}${sep}${to}`);
-    const inverse = rates[`${to}${sep}${from}`];
+    const inverse = own(rates, `${to}${sep}${from}`);
     if (inverse !== undefined && inverse !== null) {
       const r = toRational(inverse, `rates.${to}${sep}${from}`);
       return { num: r.den, den: r.num };
     }
   }
-  const nestedFrom = isObject(rates[from]) ? rates[from] : undefined;
-  if (nestedFrom && nestedFrom[to] !== undefined && nestedFrom[to] !== null) {
-    return toRational(nestedFrom[to], `rates.${from}.${to}`);
+  const rawFrom = own(rates, from);
+  const rawTo = own(rates, to);
+  const nestedFrom = isObject(rawFrom) ? rawFrom : undefined;
+  const nestedFromTo = nestedFrom ? own(nestedFrom, to) : undefined;
+  if (nestedFromTo !== undefined && nestedFromTo !== null) {
+    return toRational(nestedFromTo, `rates.${from}.${to}`);
   }
-  const nestedTo = isObject(rates[to]) ? rates[to] : undefined;
-  if (nestedTo && nestedTo[from] !== undefined && nestedTo[from] !== null) {
-    const r = toRational(nestedTo[from], `rates.${to}.${from}`);
+  const nestedTo = isObject(rawTo) ? rawTo : undefined;
+  const nestedToFrom = nestedTo ? own(nestedTo, from) : undefined;
+  if (nestedToFrom !== undefined && nestedToFrom !== null) {
+    const r = toRational(nestedToFrom, `rates.${to}.${from}`);
     return { num: r.den, den: r.num };
   }
-  const flatFrom = nestedFrom ? undefined : rates[from];
-  const flatTo = nestedTo ? undefined : rates[to];
+  const flatFrom = nestedFrom ? undefined : rawFrom;
+  const flatTo = nestedTo ? undefined : rawTo;
   const hasFrom = flatFrom !== undefined && flatFrom !== null;
   const hasTo = flatTo !== undefined && flatTo !== null;
-  if (!hasFrom && !hasTo) {
+  if ((!hasFrom && !hasTo) || ((!hasFrom || !hasTo) && hasExplicitBase(rates))) {
     throw invalid(`convert(): no exchange rate from ${from} to ${to}`, [
       issue('rates', 'rate_missing', `no exchange rate for ${from} -> ${to}`, { from, to }),
     ]);
@@ -884,9 +950,11 @@ function findRate(rates, from, to) {
 
 /**
  * Display‑only currency conversion (never use it to charge). `rates` is a base‑relative table
- * (`{ USD: 1, INR: 83.25 }`, the base itself may be omitted), a pair‑keyed table (`{ USD_INR: 83.25 }`,
- * also `USDINR`, `USD/INR`, `USD-INR`; the reverse pair is inverted) or nested (`{ USD: { INR: 83.25 } }`).
- * Arithmetic is exact on the decimal digits of amount and rate; only the final result is rounded.
+ * (`{ USD: 1, INR: 83.25 }`; the base may be omitted, but once some currency is listed at rate 1
+ * every other currency must be listed too — an unlisted one is `rate_missing`, never silently the
+ * base), a pair‑keyed table (`{ USD_INR: 83.25 }`, also `USDINR`, `USD/INR`, `USD-INR`; the reverse
+ * pair is inverted) or nested (`{ USD: { INR: 83.25 } }`). Arithmetic is exact on the decimal
+ * digits of amount and rate; only the final result is rounded.
  * @param {Money} m
  * @param {string} to  target currency
  * @param {Record<string, number|string|Record<string, number|string>>} rates
@@ -1104,13 +1172,11 @@ function signPrefix(neg, zero, signDisplay) {
 /**
  * `en`‑style formatting used when `Intl` is missing or rejects the request: 3‑digit grouping, `.`
  * decimal, symbol (or code) before the number with a no‑break space after alphabetic units.
- * @param {bigint} minor @param {number} decimals @param {string} currency @param {string} display
- * @param {number} digits @param {string} signDisplay @returns {string}
+ * @param {bigint} scaled  amount already scaled to `digits` fraction digits
+ * @param {string} currency @param {string} display @param {number} digits
+ * @param {string} signDisplay @returns {string}
  */
-function formatFallback(minor, decimals, currency, display, digits, signDisplay) {
-  let scaled = minor;
-  if (digits > decimals) scaled = minor * pow10(digits - decimals);
-  else if (digits < decimals) scaled = divRound(minor, pow10(decimals - digits));
+function formatFallback(scaled, currency, display, digits, signDisplay) {
   const neg = scaled < 0n;
   let s = (neg ? -scaled : scaled).toString();
   let frac = '';
@@ -1128,10 +1194,11 @@ function formatFallback(minor, decimals, currency, display, digits, signDisplay)
 
 /**
  * Localised currency string via `Intl.NumberFormat` with per‑currency decimals (`₹1,234.50`,
- * `¥1,234`, `BHD 1.235`). The amount is passed as a decimal string, so modern engines format it
- * exactly. When the runtime has no `Intl`, rejects the currency, locale or an option, a built‑in
- * `en`‑style fallback is used instead (symbol table, `,` grouping, `.` decimal) — it never throws for
- * a well‑formed currency.
+ * `¥1,234`, `BHD 1.235`). The amount is rounded to the displayed digits here (half away from zero,
+ * never a negative zero) and passed as a decimal string, so modern engines format it exactly and
+ * the engine's rounding mode never applies. When the runtime has no `Intl`, rejects the currency,
+ * locale or an option, a built‑in `en`‑style fallback is used instead (symbol table, `,` grouping,
+ * `.` decimal) — it never throws for a well‑formed currency.
  * @param {Money} m
  * @param {FormatMoneyOptions} [options]
  * @returns {string}
@@ -1178,13 +1245,16 @@ export function formatMoney(m, options = {}) {
     ]);
   }
   const digits = fraction === 'auto' ? x.decimals : fraction;
+  // Round to the displayed digits here (half away from zero, on a bigint), so the engine's rounding
+  // mode never applies and `-0.40` at 0 digits renders as `$0`, never `-$0`.
+  const scaled = rescale(x.minor, x.decimals, digits);
   const formatter = intlFormatter(locale, x.currency, DISPLAYS[display], digits, signDisplay);
   if (formatter) {
     try {
-      return formatter.format(unscale(x.minor, x.decimals));
+      return formatter.format(unscale(scaled, digits));
     } catch {
       // fall through to the built-in formatter
     }
   }
-  return formatFallback(x.minor, x.decimals, x.currency, display, digits, signDisplay || 'auto');
+  return formatFallback(scaled, x.currency, display, digits, signDisplay || 'auto');
 }

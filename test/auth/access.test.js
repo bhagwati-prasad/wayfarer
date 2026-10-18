@@ -145,7 +145,8 @@ describe('levelOf', () => {
 
   it('rejects malformed keys with a ValidationError', () => {
     const access = createAccess();
-    for (const bad of ['', ' ', 'a..b', '.a', 'a.', 42, null, undefined, 'a b', 'a.*.b']) {
+    const bads = ['', ' ', 'a..b', '.a', 'a.', 42, null, undefined, 'a b', 'a.*.b', 'a.*', '*'];
+    for (const bad of bads) {
       let caught;
       try {
         access.levelOf(bad);
@@ -550,6 +551,165 @@ describe('setPolicy / policy', () => {
       policy.rules['booking.*'] = 'auth';
     }).toThrow(TypeError);
     expect(access.levelOf('booking.create')).toBe('guest');
+  });
+});
+
+describe('hardening', () => {
+  it('rejects wildcard keys for levelOf / can / guard / wrap but accepts them as rules', () => {
+    const access = createAccess({
+      policy: { rules: { 'trips.*': 'auth', 'trips.changes.*': 'open' } },
+    });
+    for (const bad of ['trips.*', 'trips.changes.*', 'a.*']) {
+      expect(() => access.levelOf(bad), bad).toThrow(ValidationError);
+      expect(() => access.can(bad), bad).toThrow(ValidationError);
+      expect(() => access.guard(bad, () => {}), bad).toThrow(ValidationError);
+      expect(() => access.wrap(bad, {}), bad).toThrow(ValidationError);
+    }
+    expect(access.levelOf('trips.list')).toBe('auth');
+    expect(access.levelOf('trips.changes.quote')).toBe('open');
+  });
+
+  it('rejects prototype-polluting rule keys and never writes through __proto__', () => {
+    const events = fakeEvents();
+    const access = createAccess({ events });
+    const polluting = [
+      JSON.parse('{"__proto__": "auth"}'),
+      { constructor: 'auth' },
+      { prototype: 'auth' },
+      { '__proto__.x': 'auth' },
+      { 'a.constructor': 'auth' },
+      { 'a.__proto__.*': 'auth' },
+    ];
+    for (const rules of polluting) {
+      const label = JSON.stringify(Object.keys(rules));
+      expect(() => access.setPolicy({ rules }), label).toThrow(ConfigError);
+      expect(() => createAccess({ policy: { rules } }), label).toThrow(ConfigError);
+    }
+    expect(access.policy()).toBe(DEFAULT_ACCESS_POLICY);
+    expect(events.emit).not.toHaveBeenCalled();
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'x')).toBe(false);
+    expect(/** @type {any} */ ({}).x).toBeUndefined();
+  });
+
+  it('wrap copies an own __proto__ key as a data property instead of changing the prototype', () => {
+    const access = createAccess({ policy: { default: 'auth' } });
+    const api = JSON.parse('{"__proto__": {"deep": 1}, "fn": null}');
+    api.fn = () => 'x';
+    const wrapped = access.wrap('m', api);
+    expect(Object.getPrototypeOf(wrapped)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(wrapped, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(wrapped, '__proto__').value).toEqual({ deep: 1 });
+    expect(/** @type {any} */ ({}).deep).toBeUndefined();
+    expect(typeof wrapped.fn).toBe('function');
+  });
+
+  it('wrap is cycle-safe: self and mutual references resolve to the wrapper being built', async () => {
+    const auth = fakeAuth();
+    const access = createAccess({ auth, policy: { default: 'auth' } });
+    const api = { list: vi.fn(async () => 'l') };
+    api.self = api;
+    const group = { quote: vi.fn(async () => 'q') };
+    group.parent = api;
+    api.changes = group;
+    function fn() {
+      return 'fn';
+    }
+    fn.self = fn;
+    api.fn = fn;
+
+    const wrapped = access.wrap('m', api);
+    expect(wrapped.self).toBe(wrapped);
+    expect(wrapped.changes.parent).toBe(wrapped);
+    expect(wrapped.fn.self).toBe(wrapped.fn);
+    expect(wrapped.fn).not.toBe(fn);
+
+    // the wrappers reached through a cycle still gate
+    const { ok, error } = await settle(wrapped.self.list());
+    expect(ok).toBe(false);
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.key).toBe('m.list');
+    expect(api.list).not.toHaveBeenCalled();
+    auth.state.authenticated = true;
+    await expect(wrapped.changes.parent.changes.quote()).resolves.toBe('q');
+    expect(wrapped.fn.self()).toBe('fn');
+  });
+
+  it('wrap gives every key its own wrapper, even when two keys share one function', async () => {
+    const auth = fakeAuth();
+    const events = fakeEvents();
+    const access = createAccess({
+      auth,
+      events,
+      policy: { rules: { 'm.get': 'auth', 'm.retrieve': 'open' } },
+    });
+    const get = vi.fn(() => 'got');
+    const wrapped = access.wrap('m', { get, retrieve: get });
+    expect(wrapped.get).not.toBe(wrapped.retrieve);
+    expect(wrapped.retrieve()).toBe('got');
+    const { ok, error } = await settle(wrapped.get());
+    expect(ok).toBe(false);
+    expect(error.key).toBe('m.get');
+    expect(events.emit).toHaveBeenCalledWith('auth:required', { key: 'm.get' });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats <module>.destroy as 'open' everywhere, but not a nested destroy", async () => {
+    const auth = fakeAuth();
+    const access = createAccess({
+      auth,
+      policy: { default: 'auth', rules: { 'm.destroy': 'auth' } },
+    });
+    expect(access.levelOf('m.destroy')).toBe('open');
+    expect(access.can('m.destroy')).toBe(true);
+    expect(access.guard('m.destroy', () => 'd')()).toBe('d');
+    expect(access.levelOf('m.group.destroy')).toBe('auth');
+    expect(access.can('m.group.destroy')).toBe(false);
+    const { ok } = await settle(access.guard('m.group.destroy', () => 'd')());
+    expect(ok).toBe(false);
+    expect(auth.ensureGuestSession).not.toHaveBeenCalled();
+  });
+
+  it("'guest' preserves `this` and arguments across the guest-session wait", async () => {
+    const auth = fakeAuth();
+    const access = createAccess({ auth });
+    const api = {
+      v: 5,
+      fn: access.guard('booking.create', function (a, b) {
+        return this.v + a + b;
+      }),
+    };
+    await expect(api.fn(1, 2)).resolves.toBe(8);
+    expect(auth.ensureGuestSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent 'guest' calls each await the guest session and then run exactly once", async () => {
+    const auth = fakeAuth();
+    const gate = deferred();
+    auth.ensureGuestSession.mockImplementation(() => gate.promise);
+    const access = createAccess({ auth });
+    const fn = vi.fn(async (x) => x);
+    const guarded = access.guard('booking.create', fn);
+    const a = guarded('a');
+    const b = guarded('b');
+    await Promise.resolve();
+    expect(fn).not.toHaveBeenCalled();
+    // de-duplicating the network call is `auth.ensureGuestSession`'s (single-flight) job
+    expect(auth.ensureGuestSession).toHaveBeenCalledTimes(2);
+    gate.resolve({ guestId: 'g' });
+    await expect(a).resolves.toBe('a');
+    await expect(b).resolves.toBe('b');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores non-object auth / events options instead of throwing', () => {
+    const access = createAccess({
+      auth: /** @type {any} */ ('nope'),
+      events: /** @type {any} */ (42),
+      policy: null,
+    });
+    expect(access.can('account.me')).toBe(false);
+    expect(access.guard('booking.create', () => 'b')()).toBe('b');
+    expect(() => access.setPolicy({ default: 'guest' })).not.toThrow();
   });
 });
 

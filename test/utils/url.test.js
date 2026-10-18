@@ -12,6 +12,7 @@ import {
   decodeState,
   currentUrlParams,
 } from '../../src/utils/url.js';
+import * as urlModule from '../../src/utils/url.js';
 import { ValidationError } from '../../src/errors/index.js';
 
 afterEach(() => {
@@ -37,6 +38,24 @@ function expectValidation(fn, path) {
 }
 
 describe('module surface', () => {
+  it('exports exactly the functions documented in docs/api/03-utils.md §8', () => {
+    expect(Object.keys(urlModule).sort()).toEqual(
+      [
+        'buildQuery',
+        'parseQuery',
+        'joinUrl',
+        'withParams',
+        'isAbsoluteUrl',
+        'sameOrigin',
+        'encodeSearchParams',
+        'decodeSearchParams',
+        'encodeState',
+        'decodeState',
+        'currentUrlParams',
+      ].sort()
+    );
+  });
+
   it('exports only functions', () => {
     for (const fn of [
       buildQuery,
@@ -99,6 +118,42 @@ describe('buildQuery', () => {
 
   it('percent-encodes RFC 3986 reserved characters that encodeURIComponent leaves alone', () => {
     expect(buildQuery({ q: "it's (ok)*!" })).toBe('q=it%27s%20%28ok%29%2A%21');
+  });
+
+  it('accepts null / non-object options and falls back to repeat for an unknown arrayFormat', () => {
+    expect(buildQuery({ k: ['a', 'b'] }, null)).toBe('k=a&k=b');
+    expect(buildQuery({ k: ['a', 'b'] }, 'comma')).toBe('k=a&k=b');
+    expect(buildQuery({ k: ['a', 'b'] }, { arrayFormat: 'commas' })).toBe('k=a&k=b');
+  });
+
+  it('replaces lone surrogates with U+FFFD instead of throwing URIError', () => {
+    expect(buildQuery({ a: 'x\uD800y' })).toBe('a=x%EF%BF%BDy');
+    expect(buildQuery({ '\uDC00': 1 })).toBe('%EF%BF%BD=1');
+    expect(buildQuery({ a: ['\uD83C', '\uD83C\uDF0F'] })).toBe('a=%EF%BF%BD&a=%F0%9F%8C%8F');
+    expect(withParams('/x', { a: '\uDBFF' })).toBe('/x?a=%EF%BF%BD');
+  });
+
+  it('throws ValidationError naming the key for a value that is not JSON-serialisable', () => {
+    const circular = {};
+    circular.self = circular;
+    const err = expectValidation(() => buildQuery({ ok: 1, bad: circular }), 'bad');
+    expect(err.cause).toBeInstanceOf(TypeError);
+    expectValidation(() => buildQuery({ n: { big: 10n } }), 'n');
+    expectValidation(() => buildQuery({ list: [{ big: 10n }] }), 'list');
+    expectValidation(() => withParams('/x', { bad: circular }), 'bad');
+  });
+
+  it('serialises an object whose toJSON yields nothing as an empty value', () => {
+    expect(buildQuery({ o: { toJSON: () => undefined } })).toBe('o=');
+  });
+
+  it('does not mutate its input', () => {
+    const obj = { k: ['a', null, 'b'], d: new Date('2026-11-02T06:45:00Z'), o: { a: 1 } };
+    const snapshot = JSON.stringify(obj);
+    buildQuery(obj);
+    buildQuery(obj, { arrayFormat: 'comma', skipNull: false });
+    expect(JSON.stringify(obj)).toBe(snapshot);
+    expect(obj.k).toEqual(['a', null, 'b']);
   });
 });
 
@@ -193,6 +248,22 @@ describe('joinUrl', () => {
   it('appends a query or fragment path without a slash', () => {
     expect(joinUrl('https://api.ota.com/v1/', '?a=1')).toBe('https://api.ota.com/v1?a=1');
     expect(joinUrl('https://api.ota.com/v1', '#top')).toBe('https://api.ota.com/v1#top');
+  });
+
+  it('keeps a query or fragment of the base behind the joined path', () => {
+    expect(joinUrl('https://api.ota.com/v1?x=1', 'flights')).toBe(
+      'https://api.ota.com/v1/flights?x=1'
+    );
+    expect(joinUrl('https://api.ota.com/v1?x=1', 'flights?y=2')).toBe(
+      'https://api.ota.com/v1/flights?x=1&y=2'
+    );
+    expect(joinUrl('https://api.ota.com/v1#a', '/flights#b')).toBe(
+      'https://api.ota.com/v1/flights#b'
+    );
+    expect(joinUrl('https://api.ota.com/v1?x=1#a', 'flights')).toBe(
+      'https://api.ota.com/v1/flights?x=1#a'
+    );
+    expect(joinUrl('/', 'flights')).toBe('/flights');
   });
 });
 
@@ -544,6 +615,50 @@ describe('encodeSearchParams', () => {
       expect(typeof issue.message).toBe('string');
     }
   });
+
+  it('rejects flags that are not booleans instead of reading them as truthy', () => {
+    const slices = [{ origin: 'DEL', destination: 'BOM', date: '2026-11-02' }];
+    expectValidation(
+      () => encodeSearchParams({ ...base, slices, directOnly: 'false' }),
+      'directOnly'
+    );
+    expectValidation(
+      () => encodeSearchParams({ ...base, slices, includeNearby: 0 }),
+      'includeNearby'
+    );
+    expect(
+      encodeSearchParams({ ...base, slices, directOnly: null, includeNearby: undefined })
+    ).toBe('DEL-BOM/2026-11-02?a=1&cabin=Y');
+  });
+
+  it('rejects counts and ages beyond Number.MAX_SAFE_INTEGER (they would not round-trip)', () => {
+    const slices = [{ origin: 'DEL', destination: 'BOM', date: '2026-11-02' }];
+    expectValidation(
+      () => encodeSearchParams({ ...base, slices, passengers: { adults: 1e21 } }),
+      'passengers.adults'
+    );
+    expectValidation(
+      () =>
+        encodeSearchParams({ ...base, slices, passengers: { adults: 1, childAges: [2 ** 53] } }),
+      'passengers.childAges'
+    );
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(encodeSearchParams({ ...base, slices, passengers: { adults: max } })).toBe(
+      `DEL-BOM/2026-11-02?a=${max}&cabin=Y`
+    );
+  });
+
+  it('does not mutate its input', () => {
+    const p = {
+      slices: [{ origin: 'del', destination: ' bom ', date: '2026-11-02' }],
+      passengers: { adults: 1, childAges: [4] },
+      fareTypes: ['student'],
+      currency: 'inr',
+    };
+    const snapshot = JSON.stringify(p);
+    encodeSearchParams(p);
+    expect(JSON.stringify(p)).toBe(snapshot);
+  });
 });
 
 describe('decodeSearchParams', () => {
@@ -685,6 +800,68 @@ describe('decodeSearchParams', () => {
     }
   });
 
+  it('ignores a URL or mount prefix before the first route token (what search.fromUrl gets)', () => {
+    const expected = {
+      tripType: 'one_way',
+      slices: [{ origin: 'DEL', destination: 'BOM', date: '2026-11-02' }],
+      passengers: { adults: 2, children: 0, infants: 0 },
+      cabin: 'economy',
+    };
+    expect(decodeSearchParams('https://app.ota.com/flights/DEL-BOM/2026-11-02?a=2')).toEqual(
+      expected
+    );
+    expect(decodeSearchParams('/flights/DEL-BOM/2026-11-02?a=2#results')).toEqual(expected);
+    expect(decodeSearchParams('flights/DEL-BOM/2026-11-02?a=2')).toEqual(expected);
+    expect(
+      decodeSearchParams(
+        'https://app.ota.com/en-IN/flights/DEL-BOM/2026-11-02+BOM-GOI/2026-11-05?a=2'
+      )
+    ).toEqual({
+      ...expected,
+      tripType: 'multi_city',
+      slices: [
+        { origin: 'DEL', destination: 'BOM', date: '2026-11-02' },
+        { origin: 'BOM', destination: 'GOI', date: '2026-11-05' },
+      ],
+    });
+    const p = {
+      tripType: 'round_trip',
+      slices: [
+        { origin: 'DEL', destination: 'BOM', date: '2026-11-02' },
+        { origin: 'BOM', destination: 'DEL', date: '2026-11-09' },
+      ],
+      passengers: { adults: 2, children: 1, infants: 0 },
+      cabin: 'economy',
+    };
+    expect(
+      decodeSearchParams(joinUrl('https://app.ota.com/flights', encodeSearchParams(p)))
+    ).toEqual(p);
+  });
+
+  it('returns null for counts and ages beyond Number.MAX_SAFE_INTEGER', () => {
+    expect(decodeSearchParams('DEL-BOM/2026-11-02?a=99999999999999999999')).toBeNull();
+    expect(decodeSearchParams('DEL-BOM/2026-11-02?c=1&ages=4,99999999999999999999')).toBeNull();
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(decodeSearchParams(`DEL-BOM/2026-11-02?a=${max}`).passengers.adults).toBe(max);
+  });
+
+  it('validates calendar dates, including leap years', () => {
+    const date = (d) => decodeSearchParams(`DEL-BOM/${d}`)?.slices[0].date ?? null;
+    expect(date('2028-02-29')).toBe('2028-02-29');
+    expect(date('2000-02-29')).toBe('2000-02-29');
+    expect(date('2027-02-29')).toBeNull();
+    expect(date('2100-02-29')).toBeNull();
+    expect(date('2026-04-31')).toBeNull();
+    expect(date('2026-00-10')).toBeNull();
+    expect(date('2026-01-00')).toBeNull();
+    expect(date('2026-12-31')).toBe('2026-12-31');
+  });
+
+  it('accepts the mode code in any case, like cabin and cur', () => {
+    expect(decodeSearchParams('DEL-BOM/2026-11-02?mode=PS').resultMode).toBe('per_slice');
+    expect(decodeSearchParams('DEL-BOM/2026-11-02?mode=C').resultMode).toBe('combined');
+  });
+
   it('returns null for malformed paths', () => {
     for (const bad of [
       '',
@@ -709,7 +886,13 @@ describe('decodeSearchParams', () => {
       'DEL-BOM/2026-11-02+BOM-DEL',
       'DEL-BOM/2026-11-02/2026-11-09+BOM-DEL/2026-11-10',
       'DEL-BOM%E0%A4%A/2026-11-02',
-      'flights/DEL-BOM/2026-11-02',
+      'DEL-BOM//2026-11-02',
+      'DEL-BOM/2026-11-02/BOM-GOI/2026-11-05',
+      '2026-11-02/DEL-BOM/2026-11-03',
+      'abc-xyz/DEL-BOM/2026-11-02',
+      'https://app.ota.com/flights/',
+      'https://app.ota.com/flights/DEL-BOM',
+      'https://app.ota.com/flights/DEL-BOM/2026-11-02/BOM-GOI/2026-11-05',
     ]) {
       expect(decodeSearchParams(bad), bad).toBeNull();
     }
@@ -764,10 +947,16 @@ describe('decodeSearchParams', () => {
     expect(decodeSearchParams({ tripType: 'one_way' })).toBeNull();
   });
 
-  it('never throws', () => {
-    for (const input of ['%', '%%%', 'DEL-BOM/%ZZ', '\u0000', 'DEL-BOM/2026-11-02?%=%']) {
-      expect(() => decodeSearchParams(input)).not.toThrow();
+  it('never throws: undecodable input is null, an undecodable unknown query key is ignored', () => {
+    for (const input of ['%', '%%%', 'DEL-BOM/%ZZ', '\u0000', 'DEL-BOM/2026-11-02?a=%ZZ']) {
+      expect(decodeSearchParams(input), JSON.stringify(input)).toBeNull();
     }
+    expect(decodeSearchParams('DEL-BOM/2026-11-02?%=%')).toEqual({
+      tripType: 'one_way',
+      slices: [{ origin: 'DEL', destination: 'BOM', date: '2026-11-02' }],
+      passengers: { adults: 1, children: 0, infants: 0 },
+      cabin: 'economy',
+    });
   });
 });
 
@@ -852,6 +1041,37 @@ describe('encodeState / decodeState', () => {
     expect(err.cause).toBeInstanceOf(TypeError);
   });
 
+  it('rejects values whose JSON is not an object / array, since decodeState could never return them', () => {
+    for (const bad of ['str', 1, true, null, new Date(0), new String('x'), { toJSON: () => 'x' }]) {
+      const err = expectValidation(() => encodeState(bad), '');
+      expect(err.issues[0].message).toMatch(/object or array/);
+    }
+  });
+
+  it('drops prototype-pollution keys at every depth', () => {
+    const b64 = (json) => Buffer.from(json, 'utf8').toString('base64url');
+    const decoded = decodeState(
+      b64(
+        '{"__proto__":{"x":1},"constructor":{"prototype":{"y":2}},"nested":[{"__proto__":{"z":3},"ok":true}],"prototype":1,"a":1}'
+      )
+    );
+    expect(decoded).toEqual({ nested: [{ ok: true }], a: 1 });
+    expect(Object.prototype.hasOwnProperty.call(decoded, '__proto__')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(decoded, 'constructor')).toBe(false);
+    const target = Object.assign({}, decoded);
+    expect(Object.getPrototypeOf(target)).toBe(Object.prototype);
+    expect(target.x).toBeUndefined();
+    expect({}.x).toBeUndefined();
+    expect({}.y).toBeUndefined();
+  });
+
+  it('treats a leading UTF-8 BOM as invalid JSON on both the native and the fallback path', () => {
+    const withBom = Buffer.from([0xef, 0xbb, 0xbf, 0x7b, 0x7d]).toString('base64');
+    expect(decodeState(withBom)).toBeNull();
+    vi.stubGlobal('TextDecoder', undefined);
+    expect(decodeState(withBom)).toBeNull();
+  });
+
   it('works without TextEncoder / TextDecoder', () => {
     vi.stubGlobal('TextEncoder', undefined);
     vi.stubGlobal('TextDecoder', undefined);
@@ -907,9 +1127,33 @@ describe('currentUrlParams', () => {
     expect(currentUrlParams()).toEqual({ k: ['1', '2'], z: '9' });
   });
 
-  it('does not read window at import time (module already loaded without one)', async () => {
-    expect(typeof window).toBe('undefined');
+  it('reads only the query of a hash-router fragment, never its path', () => {
+    vi.stubGlobal('window', { location: { search: '', hash: '#/offers/abc=def?x=1' } });
+    expect(currentUrlParams()).toEqual({ x: '1' });
+    vi.stubGlobal('window', { location: { search: '?a=1', hash: '#/search/DEL-BOM/2026-11-02' } });
+    expect(currentUrlParams()).toEqual({ a: '1' });
+    vi.stubGlobal('window', {
+      location: { search: '', hash: '#access_token=t&token_type=bearer' },
+    });
+    expect(currentUrlParams()).toEqual({ access_token: 't', token_type: 'bearer' });
+  });
+
+  it('does not touch window, document, localStorage or navigator at import time', async () => {
+    const trap = (name) =>
+      new Proxy(
+        {},
+        {
+          get(_target, prop) {
+            throw new Error(`${name}.${String(prop)} read at import time`);
+          },
+        }
+      );
+    for (const name of ['window', 'document', 'localStorage', 'navigator']) {
+      vi.stubGlobal(name, trap(name));
+    }
+    vi.resetModules();
     const fresh = await import('../../src/utils/url.js');
-    expect(fresh.currentUrlParams()).toEqual({});
+    expect(typeof fresh.currentUrlParams).toBe('function');
+    expect(typeof fresh.sameOrigin).toBe('function');
   });
 });

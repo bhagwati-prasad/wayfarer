@@ -111,7 +111,7 @@ Mount the gateway's hosted payment element for `intent.method.gateway`. Effects:
 #### `payments.tokenize(element: GatewayElement, billing?: Address) → Promise<{ token, brand?, last4? }>`
 For gateways that tokenize before confirm. Effects: gateway network call (not through `http`).
 
-#### `payments.confirm(intentId?, { token?, element?, vpa?, bankCode?, walletProvider?, upiFlow?: 'collect'|'intent', deviceData?, consent? } = {}, opts?) → Promise<PaymentIntent>`
+#### `payments.confirm(intentId?, { token?, element?, vpa?, bankCode?, walletProvider?, upiFlow?: 'collect'|'intent', deviceData?, consent?, gatewayPayload? } = {}, opts?) → Promise<PaymentIntent>`
 Submit the instrument. Resolves with status `processing | requires_action | succeeded`.
 Effects: net `POST /payments/{id}/confirm` (and/or gateway `confirm`) · state `payment.intent` · emit `payment:processing | payment:actionRequired | payment:succeeded`.
 Throws: `PaymentError`.

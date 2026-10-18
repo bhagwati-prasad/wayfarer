@@ -1,13 +1,16 @@
 /**
  * Endpoint key → `{ method, path }` template map (docs/api/01-core.md §1.1, docs/BACKEND-MAPPING.md
  * §1.2). Keys are `module.function` (nested groups dotted: `'trips.changes.quote'`); the defaults are
- * built from every `net` effect line in docs/api/04…09. Operations that Amadeus backs use the Amadeus
+ * built from every `net` effect line in docs/api/01 (`auth.*`, `client.bootstrap`) and 04…09.
+ * Operations that Amadeus backs use the Amadeus
  * path **with** its version prefix (`/v2/shopping/flight-offers`, `/v1/booking/flight-orders/{id}`,
  * …); everything else is the SDK‑defined `/v1/...` path from the module docs. `createEndpoints`
  * returns a per‑client copy whose `get(key, params)` fills `{id}`‑style placeholders with URL‑encoded
- * values. Pure and SSR‑safe: no I/O, no DOM, no module‑level mutable state; it never performs a
- * request and never throws a plain `Error` (`ConfigError` for unknown keys, missing params and bad
- * templates).
+ * values (own params only, so `{constructor}` cannot read `Object.prototype`). Templates are
+ * validated on `set`: a leading `/` or an absolute URL, no whitespace, every `{`/`}` part of a
+ * well‑formed `{name}` placeholder. Pure and SSR‑safe: no I/O, no DOM, no module‑level mutable
+ * state; it never performs a request, never mutates its inputs and never throws a plain `Error`
+ * (`ConfigError` for unknown keys, missing params and bad templates).
  */
 
 import { ConfigError } from '../errors/index.js';
@@ -44,8 +47,8 @@ const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIO
 
 /** `{name}` placeholders (identifier characters only). */
 const PLACEHOLDER_RE = /\{([A-Za-z_$][\w$]*)\}/g;
-/** A `{` that does not open a well‑formed placeholder. */
-const BAD_PLACEHOLDER_RE = /\{(?![A-Za-z_$][\w$]*\})/;
+/** Any brace left once the well‑formed placeholders are removed: `{bad-name}`, `{unclosed`, `}`. */
+const STRAY_BRACE_RE = /[{}]/;
 /** Endpoint key syntax: `module.fn`, `module.group.fn`, … */
 const KEY_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 /** Keys that would collide with `Object.prototype` on a plain object. */
@@ -53,7 +56,9 @@ const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Default table as `[key, method, path]`, **sorted by key** (code‑unit order). Amadeus‑backed rows
- * carry the Amadeus path; all others carry the `/v1`‑prefixed SDK path from the module docs.
+ * carry the Amadeus path; all others carry the `/v1`‑prefixed SDK path from the module docs. The
+ * `auth.*` rows mirror `AUTH_ENDPOINTS` in `auth/session.js` (which also seeds them into a table
+ * built without this module) and `client.bootstrap` mirrors `core/client.js`.
  * Aliases documented in BACKEND-MAPPING §1.2 (`search.createQuick`, `search.alternatives`,
  * `itinerary.price`, `booking.patch`, `booking.issue`) and the task‑named `search.createGet` /
  * `search.availability` resolve to the same paths as their `module.function` keys.
@@ -133,6 +138,21 @@ const TABLE = [
   ['ancillaries.seats.map', 'GET', '/v1/itineraries/{id}/seatmaps/{segmentId}'],
   ['ancillaries.seats.select', 'POST', '/v1/itineraries/{id}/seats'],
   ['ancillaries.seats.unselect', 'DELETE', '/v1/itineraries/{id}/seats'],
+  // ── auth (01 §5; `auth/session.js` seeds the same rows into a hand‑built table) ─────────────
+  ['auth.claimAccount', 'POST', '/v1/auth/claim'],
+  ['auth.completeClaim', 'POST', '/v1/auth/claim/complete'],
+  ['auth.consumeMagicLink', 'POST', '/v1/auth/magic-link/consume'],
+  ['auth.ensureGuestSession', 'POST', '/v1/sessions/guest'],
+  ['auth.getProviderUrl', 'GET', '/v1/auth/providers/{provider}/url'],
+  ['auth.loginWithPassword', 'POST', '/v1/auth/login'],
+  ['auth.loginWithProvider', 'POST', '/v1/auth/providers/{provider}/callback'],
+  ['auth.logout', 'POST', '/v1/auth/logout'],
+  ['auth.mfa.verify', 'POST', '/v1/auth/mfa/verify'],
+  ['auth.refresh', 'POST', '/v1/auth/refresh'],
+  ['auth.register', 'POST', '/v1/auth/register'],
+  ['auth.requestMagicLink', 'POST', '/v1/auth/magic-link'],
+  ['auth.requestOtp', 'POST', '/v1/auth/otp/request'],
+  ['auth.verifyOtp', 'POST', '/v1/auth/otp/verify'],
   // ── booking (07 §1) ─────────────────────────────────────────────────────────────────────────
   ['booking.abandon', 'DELETE', '/v1/booking/flight-orders/{id}'],
   ['booking.create', 'POST', '/v1/booking/flight-orders'],
@@ -150,6 +170,8 @@ const TABLE = [
   ['booking.stream', 'GET', '/v1/bookings/{id}/stream'],
   ['booking.timeline', 'GET', '/v1/bookings/{id}/timeline'],
   ['booking.waitForTicketing', 'GET', '/v1/booking/flight-orders/{id}'],
+  // ── client (01 §1; runtime config fetched by `client.bootstrap()`) ─────────────────────────
+  ['client.bootstrap', 'GET', '/v1/config'],
   // ── content (04 §2) ─────────────────────────────────────────────────────────────────────────
   ['content.airlinePolicies', 'GET', '/v1/content/airlines/{code}/policies'],
   ['content.airportInfo', 'GET', '/v1/content/airports/{code}'],
@@ -356,12 +378,17 @@ function normalizePath(key, path) {
     throw new ConfigError(`endpoints['${key}'] must have a non-empty path`, { details: { key } });
   }
   const p = path.trim();
+  if (/\s/.test(p)) {
+    throw new ConfigError(`endpoints['${key}'] path must not contain whitespace`, {
+      details: { key, path: p },
+    });
+  }
   if (!(p.startsWith('/') || isAbsoluteUrl(p))) {
     throw new ConfigError(`endpoints['${key}'] path must start with '/' or be an absolute URL`, {
       details: { key, path: p },
     });
   }
-  if (BAD_PLACEHOLDER_RE.test(p)) {
+  if (STRAY_BRACE_RE.test(p.replace(PLACEHOLDER_RE, ''))) {
     throw new ConfigError(`endpoints['${key}'] has a malformed placeholder (expected '{name}')`, {
       details: { key, path: p },
     });
@@ -385,7 +412,7 @@ function normalizeEntry(key, template, previous) {
       template.method === undefined
         ? fallbackMethod
         : typeof template.method === 'string'
-          ? template.method.toUpperCase()
+          ? template.method.trim().toUpperCase()
           : '';
     if (!METHODS.has(method)) {
       throw new ConfigError(
@@ -404,13 +431,31 @@ function normalizeEntry(key, template, previous) {
 }
 
 /**
- * @param {string} s
- * @returns {boolean}
+ * @param {unknown} s
+ * @returns {s is string|number|boolean} a value that can be written into a path segment
  */
 function isScalar(s) {
   return (
     typeof s === 'string' || (typeof s === 'number' && Number.isFinite(s)) || typeof s === 'boolean'
   );
+}
+
+/**
+ * @param {Record<string, unknown>} o
+ * @param {string} key
+ * @returns {boolean}
+ */
+function hasOwn(o, key) {
+  return Object.prototype.hasOwnProperty.call(o, key);
+}
+
+/**
+ * Append `name` to `list` once (a template may repeat a placeholder).
+ * @param {string[]} list
+ * @param {string} name
+ */
+function addOnce(list, name) {
+  if (!list.includes(name)) list.push(name);
 }
 
 // ── factory ──────────────────────────────────────────────────────────────────────────────────────
@@ -466,13 +511,13 @@ export function createEndpoints(overrides) {
     /** @type {string[]} */
     const invalid = [];
     const path = entry.path.replace(PLACEHOLDER_RE, (_match, name) => {
-      const value = values[name];
+      const value = hasOwn(values, name) ? values[name] : undefined;
       if (value === undefined || value === null || value === '') {
-        missing.push(name);
+        addOnce(missing, name);
         return '';
       }
       if (!isScalar(value)) {
-        invalid.push(name);
+        addOnce(invalid, name);
         return '';
       }
       return encodeURIComponent(String(value));

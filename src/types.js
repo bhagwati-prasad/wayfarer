@@ -65,7 +65,7 @@
  * @property {AbortSignal} [signal] caller-owned abort signal (combined with timeout and tag)
  * @property {number} [timeoutMs] per-request timeout
  * @property {number} [retries] max retry attempts (idempotent requests only)
- * @property {(err: SdkError, attempt: number) => boolean} [retryOn] custom retry predicate
+ * @property {(err: SdkError, attempt: number, ctx?: HttpContext) => boolean} [retryOn] custom retry predicate (`ctx` is the lifecycle context of the failed attempt)
  * @property {Record<string, string>} [headers] extra request headers
  * @property {Record<string, unknown>} [query] extra query parameters
  * @property {string|true} [idempotencyKey] `true` = derive from payload
@@ -574,8 +574,8 @@
 /**
  * Age bands and passenger limits.
  * @typedef {Object} AgeRules
- * @property {number} infantMax maximum infant age
- * @property {number} childMax maximum child age
+ * @property {number} infantMax exclusive upper bound of the infant band in years: `age < infantMax` → `INF` (`2` means under 2)
+ * @property {number} childMax exclusive upper bound of the child band in years: `infantMax <= age < childMax` → `CHD` (`12` means under 12)
  * @property {'departure'|'return'} refDate date the age is computed at
  * @property {number} infantPerAdult infants allowed per adult
  * @property {number} maxPax maximum passengers
@@ -987,6 +987,8 @@
  * @property {'collect'|'intent'} [upiFlow] UPI flow
  * @property {object} [deviceData] device data
  * @property {boolean} [consent] consent given
+ * @property {object} [gatewayPayload] proof handed back by a gateway adapter, e.g. PayPal `{ orderID }`,
+ *   Razorpay `{ razorpay_payment_id, razorpay_signature }`
  */
 
 /**
@@ -1005,8 +1007,9 @@
 
 /**
  * Port implemented by the isolated payments package (`@wayfarer/sdk/payments`); domain modules depend on
- * nothing else from it. Member signatures follow docs/api/07-booking.md §2; `bookingId` / `intentId`
- * default to the current booking / intent when `undefined`.
+ * nothing else from it. Member signatures follow docs/api/07-booking.md §2, which also specifies
+ * `quoteState` and the non-hosted card helpers `validateCard` / `cardBrand` (PCI SAQ-D hosts only, hence
+ * optional); `bookingId` / `intentId` default to the current booking / intent when `undefined`.
  * @typedef {Object} PaymentsPort
  * @property {(bookingId?: string, options?: { fresh?: boolean }, opts?: RequestOpts) => Promise<PaymentMethod[]>} methods available methods
  * @property {(bookingId: string|undefined, params: PaymentQuoteParams, opts?: RequestOpts) => Promise<PaymentQuote>} quote payable for a method
@@ -1024,10 +1027,13 @@
  * @property {(bookingId: string|undefined, params: CreateIntentParams & ConfirmParams, ui?: PaymentUiOptions) => Promise<PaymentResult>} retry new intent after failure
  * @property {() => PaymentIntent|null} intent current intent
  * @property {() => PaymentIntent['status']|null} status current intent status
+ * @property {() => PaymentQuote|null} quoteState current payment quote
  * @property {{ list: (options?: { fresh?: boolean }, opts?: RequestOpts) => Promise<SavedMethod[]>, remove: (id: string, opts?: RequestOpts) => Promise<void>, setDefault: (id: string, opts?: RequestOpts) => Promise<void> }} savedMethods saved instruments
  * @property {(bookingId?: string, opts?: RequestOpts) => Promise<Document>} receipt receipt document
  * @property {(bookingId?: string, opts?: RequestOpts) => Promise<Refund[]>} refunds refunds of a booking
  * @property {{ register: (adapter: GatewayAdapter) => void, get: (name: string) => GatewayAdapter, list: () => string[] }} gateways adapter registry
+ * @property {(card: { number: string|number, expMonth: string|number, expYear: string|number, cvc: string, name: string }) => ValidationResult} [validateCard] non-hosted card entry only
+ * @property {(number: string|number) => string} [cardBrand] card brand of a PAN, non-hosted card entry only
  * @property {() => void} clear reset payment state
  */
 
@@ -1311,7 +1317,7 @@
  * @property {{ adapters?: TelemetryAdapter[], enabled?: boolean, sampleRate?: number }} [telemetry] telemetry fan-out
  * @property {Record<string, boolean|string>} [features] initial feature flags
  * @property {{ messages?: object, fallback?: string }} [i18n] message bundles
- * @property {{ level: 'silent'|'error'|'warn'|'info'|'debug', sink?: Function, redact?: string[] }} [logger] logging
+ * @property {{ level: 'silent'|'error'|'warn'|'info'|'debug', sink?: Function | Pick<Console, 'debug'|'info'|'warn'|'error'>, redact?: string[] }} [logger] logging (`sink` is a function or a console‑like object)
  * @property {boolean} [autoBootstrap] fetch `GET /config` on create
  * @property {Plugin[]} [plugins] plugins to install
  * @property {boolean} [devtools] store devtools

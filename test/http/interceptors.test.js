@@ -43,7 +43,13 @@ function ctxFor(spec, extra = {}) {
     tag: spec.tag,
     meta: new Map(),
     setHeader: vi.fn((name, value) => {
-      spec.headers = { ...(spec.headers || {}), [name]: value };
+      // mirrors http/client.js: any casing is replaced, `undefined` deletes
+      const headers = { ...(spec.headers || {}) };
+      for (const k of Object.keys(headers)) {
+        if (k.toLowerCase() === name.toLowerCase()) delete headers[k];
+      }
+      if (value !== undefined) headers[name] = value;
+      spec.headers = headers;
     }),
     setQuery: vi.fn(),
     retry: vi.fn(async () => ({ data: 'retried', status: 200, attempts: 2 })),
@@ -77,6 +83,23 @@ function fakeAuth(overrides = {}) {
     isGuest: vi.fn(() => false),
     refresh: vi.fn(async () => ({ accessToken: 'acc-2' })),
     ...overrides,
+  };
+}
+
+/** An auth whose refresh rotates the access token, as `auth/session.js` does. */
+function rotatingAuth(initial = 'acc-1', next = 'acc-2') {
+  let token = initial;
+  return {
+    getAccessToken: vi.fn(() => token),
+    getGuestToken: vi.fn(() => null),
+    isGuest: vi.fn(() => false),
+    refresh: vi.fn(async () => {
+      token = next;
+      return { accessToken: token };
+    }),
+    setToken: (t) => {
+      token = t;
+    },
   };
 }
 
@@ -186,28 +209,135 @@ describe('authInterceptor', () => {
     expect((await b.request(own, ctxFor(own))).headers).toEqual({ authorization: 'Basic abc' });
   });
 
-  it('on 401 refreshes once, then retries; a second 401 passes through', async () => {
-    const auth = fakeAuth();
+  it('on 401 refreshes once, swaps the stale bearer on ctx.spec, then retries; a second 401 passes through', async () => {
+    const auth = rotatingAuth();
     const b = authInterceptor({ auth });
     const spec = { method: 'GET', path: '/v1/trips' };
     const ctx = ctxFor(spec);
+    await b.request(spec, ctx);
+    expect(spec.headers.Authorization).toBe('Bearer acc-1');
     const err = new AuthError('expired', { reason: 'expired' });
+    let headerAtRetry;
+    ctx.retry.mockImplementation(async () => {
+      headerAtRetry = ctx.spec.headers.Authorization;
+      return { data: 'retried', status: 200, attempts: 2 };
+    });
     const res = await b.error(err, ctx);
     expect(auth.refresh).toHaveBeenCalledTimes(1);
     expect(ctx.retry).toHaveBeenCalledTimes(1);
+    // ctx.retry() re-enters at the cache / dedupe stage, so the fresh token must already be on the spec
+    expect(headerAtRetry).toBe('Bearer acc-2');
+    expect(ctx.setHeader).toHaveBeenLastCalledWith('Authorization', 'Bearer acc-2');
     expect(res).toEqual({ data: 'retried', status: 200, attempts: 2 });
+    // the client mirrors ctx.meta into response.meta (which the cache persists): no token in there
+    expect([...ctx.meta.values()].join(' ')).not.toMatch(/acc-/);
     ctx.attempt = 2;
     expect(await b.error(err, ctx)).toBeUndefined();
     expect(auth.refresh).toHaveBeenCalledTimes(1);
+    expect(ctx.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one refresh between concurrent 401s and ctx.auth.refresh(), then releases it', async () => {
+    let release;
+    const auth = rotatingAuth();
+    auth.refresh.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => {
+            auth.setToken('acc-2');
+            resolve({ accessToken: 'acc-2' });
+          };
+        })
+    );
+    const b = authInterceptor({ auth });
+    const specs = [1, 2, 3].map((i) => ({ method: 'GET', path: `/v1/r${i}` }));
+    const ctxs = specs.map((s, i) => ctxFor(s, { id: `req_${i}` }));
+    for (const [i, s] of specs.entries()) await b.request(s, ctxs[i]);
+    const err = new AuthError('expired', { reason: 'expired' });
+    const results = ctxs.map((c) => b.error(err, c));
+    const extra = ctxs[0].auth.refresh();
+    await Promise.resolve();
+    expect(auth.refresh).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([...results, extra]);
+    for (const [i, c] of ctxs.entries()) {
+      expect(c.retry).toHaveBeenCalledTimes(1);
+      expect(specs[i].headers.Authorization).toBe('Bearer acc-2');
+    }
+    expect(auth.refresh).toHaveBeenCalledTimes(1);
+    // once settled the shared refresh is released: a later 401 refreshes again
+    const late = { method: 'GET', path: '/v1/late' };
+    const lctx = ctxFor(late);
+    await b.request(late, lctx);
+    auth.refresh.mockImplementation(async () => ({ accessToken: 'acc-3' }));
+    await b.error(err, lctx);
+    expect(auth.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries without refreshing when the credentials already changed since the request was sent', async () => {
+    const auth = rotatingAuth();
+    const b = authInterceptor({ auth });
+    const spec = { method: 'GET', path: '/v1/trips' };
+    const ctx = ctxFor(spec);
+    await b.request(spec, ctx);
+    auth.setToken('acc-9'); // another request refreshed meanwhile
+    await b.error(new AuthError('expired', { reason: 'expired' }), ctx);
+    expect(auth.refresh).not.toHaveBeenCalled();
+    expect(ctx.retry).toHaveBeenCalledTimes(1);
+    expect(spec.headers.Authorization).toBe('Bearer acc-9');
+    // an anonymous request meeting a 401 once a token exists is retried with it, no refresh
+    const anon = rotatingAuth(null, 'acc-2');
+    const b2 = authInterceptor({ auth: anon });
+    const s2 = { method: 'GET', path: '/v1/me' };
+    const c2 = ctxFor(s2);
+    await b2.request(s2, c2);
+    expect(s2.headers).toBeUndefined();
+    anon.setToken('acc-2');
+    await b2.error(new AuthError(), c2);
+    expect(anon.refresh).not.toHaveBeenCalled();
+    expect(s2.headers.Authorization).toBe('Bearer acc-2');
+    expect(c2.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a 401 on caller-supplied credentials alone and drops a stale bearer when the refresh yields none', async () => {
+    const auth = rotatingAuth();
+    const b = authInterceptor({ auth });
+    const own = { method: 'GET', path: '/v1/x', headers: { authorization: 'Basic abc' } };
+    const octx = ctxFor(own);
+    await b.request(own, octx);
+    expect(await b.error(new AuthError(), octx)).toBeUndefined();
+    expect(auth.refresh).not.toHaveBeenCalled();
+    expect(octx.retry).not.toHaveBeenCalled();
+    // cookie mode: the refresh renews the cookie and leaves no bearer behind
+    const cookie = rotatingAuth('acc-old', null);
+    const b2 = authInterceptor({ auth: cookie });
+    const spec = { method: 'GET', path: '/v1/x' };
+    const ctx = ctxFor(spec);
+    await b2.request(spec, ctx);
+    expect(spec.headers.Authorization).toBe('Bearer acc-old');
+    await b2.error(new AuthError('expired', { reason: 'expired' }), ctx);
+    expect(cookie.refresh).toHaveBeenCalledTimes(1);
+    expect(spec.headers.Authorization).toBeUndefined();
+    expect(ctx.setHeader).toHaveBeenLastCalledWith('Authorization', undefined);
+    expect(ctx.retry).toHaveBeenCalledTimes(1);
   });
 
   it('uses ctx.response.status when the error carries no status', async () => {
-    const auth = fakeAuth();
+    const auth = rotatingAuth();
     const b = authInterceptor({ auth });
     const spec = { method: 'GET', path: '/v1/trips' };
     const ctx = ctxFor(spec, { response: { status: 401, headers: new Headers() } });
+    await b.request(spec, ctx);
     await b.error(new Error('raw'), ctx);
+    expect(auth.refresh).toHaveBeenCalledTimes(1);
     expect(ctx.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps caller headers given as a Headers instance when writing its own', async () => {
+    const b = authInterceptor({ auth: fakeAuth() });
+    const spec = { method: 'GET', path: '/v1/x', headers: new Headers({ 'X-Own': '1' }) };
+    const out = await b.request(spec, ctxFor(spec));
+    expect(out.headers).toEqual({ 'x-own': '1', Authorization: 'Bearer acc-1' });
   });
 
   it('leaves non-401 errors, excluded paths and auth:false requests alone', async () => {
@@ -233,9 +363,11 @@ describe('authInterceptor', () => {
     const b = authInterceptor({ auth });
     const spec = { method: 'GET', path: '/v1/trips' };
     const ctx = ctxFor(spec);
+    await b.request(spec, ctx);
     const original = new AuthError('expired', { reason: 'expired' });
     await expect(b.error(original, ctx)).rejects.toBe(original);
     expect(ctx.retry).not.toHaveBeenCalled();
+    expect(spec.headers.Authorization).toBe('Bearer acc-1');
   });
 });
 
@@ -360,6 +492,17 @@ describe('idempotencyInterceptor', () => {
     const out = await b.request(s2, ctx);
     expect(out.headers['Idempotency-Key']).toBe(idempotencyKey('/v1/booking', body));
     expect(ctx.meta.get('idempotency:key')).toBe(out.headers['Idempotency-Key']);
+    // the query is part of the request identity: a different query is a different create
+    const q = {
+      method: 'POST',
+      path: '/v1/booking',
+      query: { dry: 1 },
+      body,
+      idempotencyKey: true,
+    };
+    expect((await b.request(q, ctxFor(q))).headers['Idempotency-Key']).toBe(
+      idempotencyKey('/v1/booking?dry=1', body)
+    );
     const s3 = {
       method: 'POST',
       path: '/v1/booking',
@@ -407,14 +550,21 @@ describe('envelopeInterceptor', () => {
     const res = { data: body, status: 200, headers: new Headers() };
     const ctx = ctxFor({ method: 'GET', path: '/v2/shopping/flight-offers' });
     const out = b.response(res, ctx);
-    expect(out).toBe(res);
+    // mutated in place, nothing returned: the client keeps this very object (and its `raw`)
+    expect(out).toBeUndefined();
     expect(res.data).toEqual([{ id: '1' }]);
     expect(res.meta).toEqual({ count: 1, dictionaries: { carriers: { AI: 'Air India' } } });
     expect(res.raw).toBe(body);
-    // a second pass on the same request (data that happens to carry a `data` key) is a no-op
+    // a second pass on the same response object (data that happens to carry a `data` key) is a no-op
     res.data = { data: 'inner' };
     b.response(res, ctx);
     expect(res.data).toEqual({ data: 'inner' });
+    // a retry's response is a new object on the same ctx and is unwrapped as well
+    ctx.attempt = 2;
+    const retried = { data: { data: { id: '2' }, meta: { count: 1 } }, status: 200 };
+    b.response(retried, ctx);
+    expect(retried.data).toEqual({ id: '2' });
+    expect(retried.meta).toEqual({ count: 1 });
   });
 
   it('leaves bodies without a data key alone and supports custom keys', () => {
@@ -439,7 +589,7 @@ describe('envelopeInterceptor', () => {
     custom.response(res, ctxFor({}));
     expect(res.data).toEqual({ ok: true });
     expect(res.meta).toEqual({ x: 1, cursor: 'c' });
-    expect(b.response(null, ctxFor({}))).toBeNull();
+    expect(b.response(null, ctxFor({}))).toBeUndefined();
   });
 });
 
@@ -507,11 +657,43 @@ describe('problemInterceptor', () => {
     expect(b.error(ok, ctx)).toBeUndefined();
   });
 
+  it('prefers the error’s own problem over stale ctx.data, honours map for mapped codes and the server id', () => {
+    const b = problemInterceptor();
+    // attempt 1 answered 2xx (left in ctx.data), attempt 2 failed with its own problem document
+    const problem = { type: 'about:blank', title: 'Gone', status: 410, code: 'OFFER_EXPIRED' };
+    const ctx = ctxFor(
+      { method: 'POST', path: '/v1/x' },
+      {
+        attempt: 2,
+        data: { data: [{ id: 'old' }] },
+        response: { status: 410, headers: new Headers({ 'x-request-id': 'srv-7' }) },
+      }
+    );
+    const out = b.error(new ApiError('raw', { status: 410, problem }), ctx);
+    expect(out).toBeInstanceOf(OfferExpiredError);
+    expect(out.problem).toMatchObject(problem);
+    expect(out.requestId).toBe('srv-7');
+    // an already specific error is left alone…
+    expect(b.error(new NotFoundError('mapped'), ctx)).toBeUndefined();
+    // …unless `map` names its code: the host's class wins, once
+    class MyNotFound extends ApiError {
+      constructor(message, options) {
+        super(message, options);
+        this.name = 'MyNotFound';
+      }
+    }
+    const mapped = problemInterceptor({ map: { NOT_FOUND: MyNotFound } });
+    const re = mapped.error(new NotFoundError('nope'), ctxFor({}));
+    expect(re).toBeInstanceOf(MyNotFound);
+    expect(re.status).toBe(404);
+    expect(mapped.error(re, ctxFor({}))).toBeUndefined();
+  });
+
   it('throws for 4xx responses or problem+json bodies at the response stage, passes 2xx', () => {
     const b = problemInterceptor();
     const ctx = ctxFor({ method: 'GET', path: '/v1/x' });
     const good = { status: 200, headers: new Headers(), data: { ok: true } };
-    expect(b.response(good, ctx)).toBe(good);
+    expect(b.response(good, ctx)).toBeUndefined();
     expect(() =>
       b.response({ status: 429, headers: new Headers({ 'retry-after': '3' }), data: '' }, ctx)
     ).toThrow(RateLimitError);
@@ -536,77 +718,72 @@ describe('rateLimitInterceptor', () => {
     expect(() => rateLimitInterceptor({ maxRetries: 'x' })).toThrow(ConfigError);
   });
 
-  it('waits Retry-After then retries, once per request', async () => {
-    vi.useFakeTimers();
+  it('asks the client for a delayed retry (Retry-After → ctx.retry({ delayMs })), maxRetries times per request', async () => {
     const b = rateLimitInterceptor();
     const spec = { method: 'GET', path: '/v1/x' };
     const ctx = ctxFor(spec);
     const err = new RateLimitError('slow down', { retryAfterMs: 2000 });
-    const p = b.error(err, ctx);
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(ctx.retry).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(p).resolves.toEqual({ data: 'retried', status: 200, attempts: 2 });
+    await expect(b.error(err, ctx)).resolves.toEqual({ data: 'retried', status: 200, attempts: 2 });
     expect(ctx.retry).toHaveBeenCalledTimes(1);
+    expect(ctx.retry).toHaveBeenCalledWith({ delayMs: 2000 });
+    expect(ctx.meta.get('rateLimit:retries')).toBe(1);
     expect(await b.error(err, ctx)).toBeUndefined();
     expect(ctx.retry).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
+    const twice = rateLimitInterceptor({ maxRetries: 2 });
+    const c2 = ctxFor({ method: 'GET', path: '/v1/x' });
+    await twice.error(err, c2);
+    await twice.error(err, c2);
+    expect(await twice.error(err, c2)).toBeUndefined();
+    expect(c2.retry).toHaveBeenCalledTimes(2);
   });
 
-  it('caps the wait at maxWaitMs and reads the Retry-After header / default wait', async () => {
-    vi.useFakeTimers();
+  it('caps the delay at maxWaitMs, reads Retry-After as seconds or an HTTP date, falls back to defaultWaitMs', async () => {
     const b = rateLimitInterceptor({ maxWaitMs: 500, defaultWaitMs: 100 });
     const ctx = ctxFor(
       { method: 'GET', path: '/v1/x' },
       { response: { status: 429, headers: new Headers({ 'Retry-After': '60' }) } }
     );
-    const p = b.error(new Error('raw 429'), ctx);
-    await vi.advanceTimersByTimeAsync(500);
-    await expect(p).resolves.toBeDefined();
-    expect(ctx.retry).toHaveBeenCalledTimes(1);
+    await expect(b.error(new Error('raw 429'), ctx)).resolves.toBeDefined();
+    expect(ctx.retry).toHaveBeenCalledWith({ delayMs: 500 });
     const ctx2 = ctxFor({ method: 'GET', path: '/v1/x' });
-    const p2 = b.error(new RateLimitError('no header'), ctx2);
-    await vi.advanceTimersByTimeAsync(99);
-    expect(ctx2.retry).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await p2;
-    expect(ctx2.retry).toHaveBeenCalledTimes(1);
+    await b.error(new RateLimitError('no header'), ctx2);
+    expect(ctx2.retry).toHaveBeenCalledWith({ delayMs: 100 });
+    const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const dated = rateLimitInterceptor({ now: () => now });
+    const ctx3 = ctxFor(
+      { method: 'GET', path: '/v1/x' },
+      {
+        response: {
+          status: 429,
+          headers: new Headers({ 'Retry-After': new Date(now + 3000).toUTCString() }),
+        },
+      }
+    );
+    await dated.error(new RateLimitError('dated'), ctx3);
+    expect(ctx3.retry).toHaveBeenCalledWith({ delayMs: 3000 });
+    const ctx4 = ctxFor({});
+    await dated.error(new RateLimitError('meta', { meta: { retryAfterMs: 250 } }), ctx4);
+    expect(ctx4.retry).toHaveBeenCalledWith({ delayMs: 250 });
   });
 
-  it('uses injectable timers and leaves other errors alone', async () => {
-    const timers = {
-      setTimeout: vi.fn((fn) => {
-        fn();
-        return 1;
-      }),
-      clearTimeout: vi.fn(),
-    };
-    const b = rateLimitInterceptor({ timers });
-    const ctx = ctxFor({ method: 'GET', path: '/v1/x' });
-    await b.error(new RateLimitError('x', { retryAfterMs: 1500 }), ctx);
-    expect(timers.setTimeout).toHaveBeenCalledWith(expect.any(Function), 1500);
-    expect(ctx.retry).toHaveBeenCalledTimes(1);
+  it('leaves other errors alone, never waits on a timer of its own and surfaces the client’s abort', async () => {
+    vi.useFakeTimers();
+    const b = rateLimitInterceptor();
     expect(await b.error(new NetworkError(), ctxFor({}))).toBeUndefined();
     expect(await b.error(new ApiError('x', { status: 500 }), ctxFor({}))).toBeUndefined();
     const noRetry = ctxFor({});
     delete noRetry.retry;
     expect(await b.error(new RateLimitError(), noRetry)).toBeUndefined();
-  });
-
-  it('rejects with AbortError and clears the timer when the signal aborts during the wait', async () => {
-    vi.useFakeTimers();
-    const b = rateLimitInterceptor();
-    const ac = new AbortController();
-    const ctx = ctxFor({ method: 'GET', path: '/v1/x' }, { signal: ac.signal });
+    const ctx = ctxFor({ method: 'GET', path: '/v1/x' });
     const p = b.error(new RateLimitError('x', { retryAfterMs: 5000 }), ctx);
-    const expectation = expect(p).rejects.toBeInstanceOf(AbortError);
-    await vi.advanceTimersByTimeAsync(10);
-    ac.abort();
-    await expectation;
-    expect(vi.getTimerCount()).toBe(0);
-    expect(ctx.retry).not.toHaveBeenCalled();
-    const already = ctxFor({}, { signal: AbortSignal.abort() });
-    await expect(b.error(new RateLimitError(), already)).rejects.toBeInstanceOf(AbortError);
+    expect(vi.getTimerCount()).toBe(0); // the wait belongs to the client (ctx.retry), not to us
+    await expect(p).resolves.toBeDefined();
+    // the client rejects ctx.retry() with AbortError when the request aborts during its wait
+    const aborted = ctxFor({ method: 'GET', path: '/v1/x' });
+    aborted.retry = vi.fn(async () => {
+      throw new AbortError('Request aborted', { reason: 'aborted' });
+    });
+    await expect(b.error(new RateLimitError(), aborted)).rejects.toBeInstanceOf(AbortError);
   });
 });
 
@@ -638,17 +815,20 @@ describe('cacheInterceptor', () => {
       data: [{ code: 'DEL' }],
       status: 200,
       headers: new Headers({ etag: 'v1' }),
-      meta: { count: 1 },
+      // as the client builds it: the interceptors' ctx.meta bookkeeping is mirrored into meta
+      meta: { count: 1, 'cache:key': key, 'dedupe:key': 'GET /v1/places?q=DEL|en-IN|INR' },
       fromCache: false,
       attempts: 1,
       durationMs: 12,
     };
-    expect(b.response(res, ctx)).toBe(res);
+    expect(b.response(res, ctx)).toBeUndefined();
     expect(storage.set).toHaveBeenCalledWith(
       key,
       expect.objectContaining({ data: [{ code: 'DEL' }], status: 200, expiresAt: 11_000 }),
       { ttlMs: 1000 }
     );
+    // only the response's own meta is persisted, never the bookkeeping keys
+    expect(storage.map.get(key).meta).toEqual({ count: 1 });
 
     t = 10_500;
     const again = { ...spec, headers: { ...spec.headers } };
@@ -737,6 +917,37 @@ describe('cacheInterceptor', () => {
     b.clear();
     expect(await b.request({ ...a }, ctxFor({ ...a }))).toEqual({ ...a });
   });
+
+  it('keys cacheable non-GET requests by body and skips bodies without a stable text', async () => {
+    const storage = memoryStore();
+    const b = cacheInterceptor({ storage, defaultTtlMs: 1000, methods: ['POST'] });
+    const a = { method: 'POST', path: '/v1/search', body: { from: 'DEL', to: 'BOM' }, cache: true };
+    const same = {
+      method: 'POST',
+      path: '/v1/search',
+      body: { to: 'BOM', from: 'DEL' },
+      cache: true,
+    };
+    const other = {
+      method: 'POST',
+      path: '/v1/search',
+      body: { from: 'DEL', to: 'GOI' },
+      cache: true,
+    };
+    const ctx = ctxFor(a);
+    await b.request(a, ctx);
+    expect(ctx.meta.get('cache:key')).toBe('cache:POST /v1/search|||{"from":"DEL","to":"BOM"}');
+    b.response({ data: 'DEL-BOM', status: 200 }, ctx);
+    expect((await b.request(same, ctxFor(same))).data).toBe('DEL-BOM');
+    expect(await b.request(other, ctxFor(other))).toBe(other);
+    const binary = { method: 'POST', path: '/v1/search', body: new Blob(['x']), cache: true };
+    const bctx = ctxFor(binary);
+    expect(await b.request(binary, bctx)).toBe(binary);
+    expect(bctx.meta.has('cache:key')).toBe(false);
+    expect(b.key(binary)).toBeUndefined();
+    const custom = { method: 'POST', path: '/v1/s', body: { a: 1 }, cache: { ttlMs: 1, key: 'k' } };
+    expect(b.key(custom)).toBe('cache:k|||{"a":1}');
+  });
 });
 
 // ── dedupeInterceptor ────────────────────────────────────────────────────────────────────────────
@@ -753,9 +964,19 @@ describe('dedupeInterceptor', () => {
     const shared = b.request(follower, fctx);
     expect(shared).toBeInstanceOf(Promise);
     expect(fctx.meta.get('dedupe:follower')).toBe('GET /v1/x?a=1||');
-    const res = { data: { ok: true }, status: 200, headers: new Headers(), fromCache: false };
-    expect(b.response(res, lctx)).toBe(res);
-    expect(await shared).toEqual({ ...res, deduped: true });
+    const res = {
+      data: { ok: true },
+      status: 200,
+      headers: new Headers({ etag: 'v1' }),
+      fromCache: false,
+    };
+    expect(b.response(res, lctx)).toBeUndefined();
+    const got = await shared;
+    expect(got).toMatchObject({ data: { ok: true }, status: 200, fromCache: false, deduped: true });
+    // the follower owns its headers (they are mutable); `data` is shared by design
+    expect(got.headers).not.toBe(res.headers);
+    expect(got.headers.get('etag')).toBe('v1');
+    expect(got.data).toBe(res.data);
     expect(b.inflight()).toBe(0);
     // after settling, a new identical request is a fresh leader
     const next = { method: 'GET', path: '/v1/x', query: { a: 1 } };
@@ -763,29 +984,97 @@ describe('dedupeInterceptor', () => {
     expect(b.inflight()).toBe(1);
   });
 
-  it('rejects followers with the leader error and never deadlocks a retrying leader', async () => {
+  it('rejects followers only with a final leader error; a retryable one releases them to their own request', async () => {
     const b = dedupeInterceptor();
-    const leader = { method: 'GET', path: '/v1/y' };
+    // retryable failure with retry budget left: not the outcome → followers resume with their own spec
+    const leader = { method: 'GET', path: '/v1/y', retries: 2 };
     const lctx = ctxFor(leader, { id: 'req_l' });
     await b.request(leader, lctx);
-    const shared = b.request({ method: 'GET', path: '/v1/y' }, ctxFor({}, { id: 'req_f' }));
-    const expectation = expect(shared).rejects.toBeInstanceOf(NetworkError);
+    const fspec = { method: 'GET', path: '/v1/y' };
+    const shared = b.request(fspec, ctxFor(fspec, { id: 'req_f' }));
     // the leader re-enters the request stage on a retry: it stays the leader
     lctx.attempt = 2;
     expect(await b.request(leader, lctx)).toBe(leader);
     expect(b.inflight()).toBe(1);
-    const err = new NetworkError('down');
-    expect(b.error(err, lctx)).toBeUndefined();
-    await expectation;
+    expect(b.error(new NetworkError('blip'), lctx)).toBeUndefined();
+    expect(await shared).toBe(fspec);
+    expect(b.inflight()).toBe(0);
+    // retry budget exhausted: the same retryable error is final
+    const l2 = { method: 'GET', path: '/v1/z', retries: 2 };
+    const c2 = ctxFor(l2, { id: 'req_l2', attempt: 3 });
+    await b.request(l2, c2);
+    const f2 = b.request({ method: 'GET', path: '/v1/z' }, ctxFor({}, { id: 'req_f2' }));
+    const exp2 = expect(f2).rejects.toBeInstanceOf(NetworkError);
+    b.error(new NetworkError('down for good'), c2);
+    await exp2;
+    // a non-retryable error is final whatever the attempt
+    const l3 = { method: 'GET', path: '/v1/w' };
+    const c3 = ctxFor(l3, { id: 'req_l3' });
+    await b.request(l3, c3);
+    const f3 = b.request({ method: 'GET', path: '/v1/w' }, ctxFor({}, { id: 'req_f3' }));
+    const exp3 = expect(f3).rejects.toBeInstanceOf(NotFoundError);
+    b.error(new NotFoundError('gone'), c3);
+    await exp3;
+    // the leader's own abort is not the followers' problem: they are released
+    const l4 = { method: 'GET', path: '/v1/v' };
+    const c4 = ctxFor(l4, { id: 'req_l4' });
+    await b.request(l4, c4);
+    const s4 = { method: 'GET', path: '/v1/v' };
+    const f4 = b.request(s4, ctxFor(s4, { id: 'req_f4' }));
+    b.error(new AbortError('cancelled'), c4);
+    expect(await f4).toBe(s4);
     expect(b.inflight()).toBe(0);
     // settling from a ctx that is not the owner is ignored
-    const other = { method: 'GET', path: '/v1/z' };
+    const other = { method: 'GET', path: '/v1/o' };
     const octx = ctxFor(other, { id: 'req_o' });
     await b.request(other, octx);
     const stranger = ctxFor(other, { id: 'req_s' });
-    stranger.meta.set('dedupe:key', 'GET /v1/z||');
+    stranger.meta.set('dedupe:key', 'GET /v1/o||');
     b.response({ data: 1, status: 200 }, stranger);
     expect(b.inflight()).toBe(1);
+  });
+
+  it('lets a waiting follower abort on its own signal without touching the leader', async () => {
+    const b = dedupeInterceptor();
+    const leader = { method: 'GET', path: '/v1/slow' };
+    const lctx = ctxFor(leader, { id: 'req_l' });
+    await b.request(leader, lctx);
+    const ac = new AbortController();
+    const fspec = { method: 'GET', path: '/v1/slow' };
+    const waiting = b.request(fspec, ctxFor(fspec, { id: 'req_f', signal: ac.signal }));
+    const expectation = expect(waiting).rejects.toBeInstanceOf(AbortError);
+    ac.abort();
+    await expectation;
+    expect(b.inflight()).toBe(1);
+    // the leader still completes and serves the next follower
+    const next = b.request({ method: 'GET', path: '/v1/slow' }, ctxFor({}, { id: 'req_n' }));
+    b.response({ data: 'late', status: 200, headers: {} }, lctx);
+    expect((await next).data).toBe('late');
+    // an already aborted follower rejects at once
+    await b.request({ method: 'GET', path: '/v1/again' }, ctxFor({}, { id: 'req_l2' }));
+    const already = ctxFor(fspec, { id: 'req_a', signal: AbortSignal.abort() });
+    await expect(b.request({ method: 'GET', path: '/v1/again' }, already)).rejects.toBeInstanceOf(
+      AbortError
+    );
+  });
+
+  it('dedupes non-GET requests only on dedupe: true, keyed by body; unkeyable bodies pass through', async () => {
+    const b = dedupeInterceptor();
+    const post = { method: 'POST', path: '/v1/search', body: { q: 1 }, dedupe: true };
+    const pctx = ctxFor(post, { id: 'req_p' });
+    expect(await b.request(post, pctx)).toBe(post);
+    expect(pctx.meta.get('dedupe:key')).toBe('POST /v1/search|||{"q":1}');
+    const same = { method: 'POST', path: '/v1/search', body: { q: 1 }, dedupe: true };
+    const shared = b.request(same, ctxFor(same, { id: 'req_s' }));
+    const other = { method: 'POST', path: '/v1/search', body: { q: 2 }, dedupe: true };
+    expect(await b.request(other, ctxFor(other, { id: 'req_o' }))).toBe(other);
+    expect(b.inflight()).toBe(2);
+    b.response({ data: 'one', status: 200, headers: {} }, pctx);
+    expect((await shared).data).toBe('one');
+    const form = { method: 'POST', path: '/v1/upload', body: new FormData(), dedupe: true };
+    const fctx = ctxFor(form, { id: 'req_u' });
+    expect(await b.request(form, fctx)).toBe(form);
+    expect(fctx.meta.has('dedupe:key')).toBe(false);
   });
 
   it('skips non-GET requests, dedupe:false and distinct keys', async () => {
@@ -870,6 +1159,28 @@ describe('deviceInterceptor', () => {
     expect((await b2.request(s4, ctxFor(s4))).headers).toEqual({ 'X-Device-Id': 'late' });
     expect(lazy).toHaveBeenCalledTimes(2);
   });
+
+  it('asks the host once for concurrent first requests', async () => {
+    let release;
+    const getDeviceId = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve('dev-1');
+        })
+    );
+    const storage = memoryStore();
+    const b = deviceInterceptor({ getDeviceId, storage });
+    const specs = [1, 2, 3].map((i) => ({ method: 'GET', path: `/v1/${i}` }));
+    const pending = specs.map((s) => b.request(s, ctxFor(s)));
+    expect(getDeviceId).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all(pending);
+    for (const s of specs) expect(s.headers).toEqual({ 'X-Device-Id': 'dev-1' });
+    expect(storage.set).toHaveBeenCalledTimes(1);
+    const s5 = { method: 'GET', path: '/v1/5' };
+    await b.request(s5, ctxFor(s5));
+    expect(getDeviceId).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── telemetryInterceptor ─────────────────────────────────────────────────────────────────────────
@@ -946,7 +1257,8 @@ describe('loggingInterceptor', () => {
         identifier: 'me',
         password: 'hunter2',
         card: { pan: '4111' },
-        nested: [{ documents: 1 }],
+        cardNumber: '4111 1111 1111 1111',
+        nested: [{ documents: 1, travelerDocuments: [] }],
       },
     };
     const ctx = ctxFor(spec, { tag: 'auth' });
@@ -963,10 +1275,18 @@ describe('loggingInterceptor', () => {
         identifier: 'me',
         password: '[redacted]',
         card: '[redacted]',
-        nested: [{ documents: '[redacted]' }],
+        cardNumber: '[redacted]',
+        nested: [{ documents: '[redacted]', travelerDocuments: '[redacted]' }],
       },
     });
     expect(spec.body.password).toBe('hunter2');
+    // a hostile body cannot reshape the log record
+    const hostile = JSON.parse('{"__proto__": {"polluted": true}, "ok": 1}');
+    await b.request({ method: 'POST', path: '/v1/x', body: hostile }, ctxFor({}));
+    const logged = logger.debug.mock.calls.at(-1)[1].body;
+    expect(logged).toEqual({ ok: 1 });
+    expect(Object.getPrototypeOf(logged)).toBe(Object.prototype);
+    expect('polluted' in logged).toBe(false);
     expect(
       b.response({ status: 200, durationMs: 5, data: { token: 't', password: 'x' } }, ctx)
     ).toBeUndefined();
@@ -993,12 +1313,13 @@ describe('loggingInterceptor', () => {
   it('supports custom redact keys / level, circular data and a throwing logger', async () => {
     const logger = { info: vi.fn() };
     const b = loggingInterceptor({ logger, redact: ['secret'], level: 'info' });
-    const body = { secret: 1, password: 'kept' };
+    const body = { secret: 1, clientSecret: 2, password: 'kept' };
     body.self = body;
     const spec = { method: 'POST', path: '/v1/x', body, headers: { Authorization: 'kept too' } };
     await b.request(spec, ctxFor(spec));
     expect(logger.info.mock.calls[0][1].body).toEqual({
       secret: '[redacted]',
+      clientSecret: '[redacted]',
       password: 'kept',
       self: '[circular]',
     });
@@ -1243,6 +1564,43 @@ describe('installDefaultInterceptors', () => {
       'problem',
       'rateLimit',
     ]);
+  });
+
+  it('skips cache and dedupe when http runs the §3.1 cache / dedupe stage itself', () => {
+    // `createHttp` exposes `http.cache` + `http.inflight()`: its own stage already caches and dedupes.
+    const http = { ...stagedHttp(), cache: { clear() {}, invalidate() {} }, inflight: () => 0 };
+    const off = installDefaultInterceptors(http, {});
+    expect(off.bundles.map((b) => b.name)).toEqual([
+      'correlation',
+      'idempotency',
+      'envelope',
+      'problem',
+      'rateLimit',
+    ]);
+    off();
+  });
+
+  it('skips cache and dedupe for a real createHttp client', async () => {
+    const { createHttp } = await import('../../src/http/client.js');
+    const http = createHttp({ baseUrl: 'https://api.ota.com' });
+    const off = installDefaultInterceptors(http, {});
+    const names = off.bundles.map((b) => b.name);
+    expect(names).not.toContain('cache');
+    expect(names).not.toContain('dedupe');
+    off();
+    http.destroy();
+  });
+
+  it('lets deps.cache / deps.dedupe force either bundle on or off', () => {
+    const native = { ...stagedHttp(), cache: { clear() {}, invalidate() {} }, inflight: () => 0 };
+    const forced = installDefaultInterceptors(native, { cache: true, dedupe: true });
+    expect(forced.bundles.map((b) => b.name)).toContain('cache');
+    expect(forced.bundles.map((b) => b.name)).toContain('dedupe');
+    forced();
+    const plain = installDefaultInterceptors(stagedHttp(), { cache: false, dedupe: false });
+    expect(plain.bundles.map((b) => b.name)).not.toContain('cache');
+    expect(plain.bundles.map((b) => b.name)).not.toContain('dedupe');
+    plain();
   });
 
   it('falls back to http.use(bundle, opts) and reports the stage priorities there', () => {

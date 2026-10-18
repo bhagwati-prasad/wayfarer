@@ -5,9 +5,9 @@
  * unless it is explicitly asked for the viewer's zone (`tz: 'local'`). Offset‑less inputs are flagged
  * (`localTimeOnly`) and compared as a same‑zone wall clock. Everything is pure and uses only `Date` and
  * `Intl`, except `countdown`, whose interval timer is injectable (`options.timers`) and always cleared by
- * the returned `stop()`. SSR‑safe: no `window`, `document`, storage or module‑level mutable state (the
- * only module‑level object is an invisible `Intl.DateTimeFormat` memo); no logging. Plain `Error`s are
- * never thrown — only `ValidationError`.
+ * the returned `stop()`, on expiry, or when `onTick` throws. SSR‑safe: no `window`, `document`, storage
+ * or module‑level mutable state (the only module‑level object is an invisible `Intl.DateTimeFormat`
+ * memo); no logging; inputs are never mutated. Plain `Error`s are never thrown — only `ValidationError`.
  */
 
 import { ValidationError } from '../errors/index.js';
@@ -56,13 +56,13 @@ const DAY = 24 * HOUR;
 const DATETIME_RE =
   /^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?(?:\s?([Zz]|[+-]\d{2}(?::?\d{2})?))?)?$/;
 
-/** @type {Record<DateStyle, Intl.DateTimeFormatOptions>} */
-const DATE_STYLES = {
-  short: { day: 'numeric', month: 'short' },
-  medium: { day: 'numeric', month: 'short', year: 'numeric' },
-  long: { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' },
-  weekday: { weekday: 'short', day: 'numeric', month: 'short' },
-};
+/** @type {Readonly<Record<DateStyle, Readonly<Intl.DateTimeFormatOptions>>>} */
+const DATE_STYLES = Object.freeze({
+  short: Object.freeze({ day: 'numeric', month: 'short' }),
+  medium: Object.freeze({ day: 'numeric', month: 'short', year: 'numeric' }),
+  long: Object.freeze({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }),
+  weekday: Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' }),
+});
 
 /** Default age bands when `AgeRules` leaves them out: infant under 2, child under 12. */
 const DEFAULT_INFANT_MAX = 2;
@@ -104,19 +104,44 @@ function opts(v) {
   return typeof v === 'object' && v !== null ? /** @type {Record<string, any>} */ (v) : {};
 }
 
-/** @param {number} year @param {number} month 1‑12 @returns {number} */
-function daysInMonth(year, month) {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+/**
+ * `Math.round` that is symmetric around zero (`-2.5 → -3` just as `2.5 → 3`), never `-0`.
+ * @param {number} x @returns {number}
+ */
+function roundSym(x) {
+  return (x < 0 ? -Math.round(-x) : Math.round(x)) || 0;
 }
 
-/** @param {unknown} v @returns {v is LocalDateTime} */
+/**
+ * `Date.UTC` without the two‑digit‑year quirk: years 0‑99 stay 0‑99 instead of becoming 1900‑1999.
+ * Out‑of‑range parts overflow exactly as with `Date.UTC` (day 0 = last day of the previous month).
+ * @param {number} y @param {number} mo 1‑12 @param {number} d
+ * @param {number} [h] @param {number} [mi] @param {number} [s] @param {number} [ms]
+ * @returns {Date}
+ */
+function utcDate(y, mo, d, h = 0, mi = 0, s = 0, ms = 0) {
+  const date = new Date(Date.UTC(y, mo - 1, d, h, mi, s, ms));
+  if (y >= 0 && y < 100) date.setUTCFullYear(y, mo - 1, d);
+  return date;
+}
+
+/** @param {number} year @param {number} month 1‑12 @returns {number} */
+function daysInMonth(year, month) {
+  return utcDate(year, month + 1, 0).getUTCDate();
+}
+
+/**
+ * Structural check for an already parsed value; a look‑alike with a malformed `offsetMinutes` is
+ * rejected here so it never reaches `Intl` (which would throw a plain `RangeError`).
+ * @param {unknown} v @returns {v is LocalDateTime}
+ */
 function isLocalDateTime(v) {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = /** @type {Record<string, unknown>} */ (v);
   return (
-    typeof v === 'object' &&
-    v !== null &&
-    /** @type {LocalDateTime} */ (v).wall instanceof Date &&
-    'offsetMinutes' in v &&
-    'localTimeOnly' in v
+    o.wall instanceof Date &&
+    (o.offsetMinutes === null || isFiniteNumber(o.offsetMinutes)) &&
+    typeof o.localTimeOnly === 'boolean'
   );
 }
 
@@ -160,8 +185,7 @@ function build(c, offsetMinutes, zulu, path, original) {
       value: original,
     });
   }
-  const wall = new Date(Date.UTC(y, mo - 1, d, h, mi, s, ms));
-  if (y < 100) wall.setUTCFullYear(y);
+  const wall = utcDate(y, mo, d, h, mi, s, ms);
   let iso = `${String(y).padStart(4, '0')}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(s)}`;
   if (ms) iso += `.${pad3(ms)}`;
   if (offsetMinutes !== null) iso += zulu ? 'Z' : formatOffset(offsetMinutes);
@@ -248,9 +272,9 @@ function keyOfWall(wall) {
   return `${String(wall.getUTCFullYear()).padStart(4, '0')}-${pad2(wall.getUTCMonth() + 1)}-${pad2(wall.getUTCDate())}`;
 }
 
-/** Calendar day of a wall clock as a whole number of days since the epoch. @param {Date} wall */
+/** Calendar day of a wall clock as a whole number of days since the epoch. @param {Date} wall @returns {number} */
 function dayNumber(wall) {
-  return Math.floor(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate()) / DAY);
+  return Math.floor(wall.getTime() / DAY);
 }
 
 /** @param {unknown} v @param {string} [path] @returns {number} epoch ms */
@@ -305,13 +329,35 @@ function dtf(locale, options) {
 }
 
 /**
+ * Reject a structurally invalid BCP 47 tag the same way `Intl` constructors do, without depending on
+ * the constructor that will consume it (used where that constructor has a non‑throwing fallback).
+ * @param {unknown} locale
+ * @returns {void}
+ */
+function assertLocale(locale) {
+  if (locale === undefined) return;
+  try {
+    Intl.getCanonicalLocales(/** @type {any} */ (locale));
+  } catch (e) {
+    throw invalid(`Unsupported locale "${String(locale)}"`, 'locale', 'invalid_locale', {
+      value: locale,
+      cause: e instanceof Error ? e.message : e,
+    });
+  }
+}
+
+/**
  * Hour options honouring `hour12` without the `24:00` quirk of `hour12: false`. 24‑hour clocks (by
  * request or by locale) get two‑digit hours (`06:45`), 12‑hour clocks keep `6:45 AM`.
- * @param {boolean|undefined} hour12
+ * @param {unknown} hour12 `true`, `false` or `undefined` / `null` (locale default)
  * @param {string|string[]|undefined} locale
  * @returns {Intl.DateTimeFormatOptions}
+ * @throws {ValidationError} when `hour12` is not a boolean
  */
 function hourOptions(hour12, locale) {
+  if (hour12 !== undefined && hour12 !== null && typeof hour12 !== 'boolean') {
+    throw invalid('Expected hour12 to be a boolean', 'hour12', 'invalid_option', { value: hour12 });
+  }
   /** @type {Intl.DateTimeFormatOptions} */
   const o = { hour: 'numeric', minute: '2-digit' };
   if (hour12 === true) o.hour12 = true;
@@ -348,8 +394,8 @@ function zoneTarget(p, tz) {
  */
 function dateStyleOptions(style, fallback) {
   const s = style === undefined ? fallback : style;
-  const o = DATE_STYLES[/** @type {DateStyle} */ (s)];
-  if (!o || typeof s !== 'string') {
+  // Own keys only: `'constructor'` / `'__proto__'` must not resolve through the prototype chain.
+  if (typeof s !== 'string' || !Object.prototype.hasOwnProperty.call(DATE_STYLES, s)) {
     throw invalid(
       "Expected style to be 'short', 'medium', 'long' or 'weekday'",
       'style',
@@ -357,7 +403,7 @@ function dateStyleOptions(style, fallback) {
       { value: style }
     );
   }
-  return o;
+  return DATE_STYLES[/** @type {DateStyle} */ (s)];
 }
 
 /** Strict `YYYY-MM-DD` → `[year, month, day]`. @param {unknown} v @param {string} path */
@@ -466,6 +512,8 @@ export function formatDateRange(a, b, options = {}) {
 
 /**
  * One duration part, localised through `Intl.NumberFormat` unit style when the engine has it.
+ * The locale has been validated by the caller, so a throw here means the engine lacks unit style and
+ * English labels are used instead.
  * @param {number} n @param {'day'|'hour'|'minute'} unit @param {'narrow'|'short'} display
  * @param {string|string[]|undefined} locale
  * @returns {string}
@@ -489,7 +537,7 @@ function durationPart(n, unit, display, locale) {
  * @param {number} minutes
  * @param {{ style?: DurationStyle, locale?: string|string[] }} [options]
  * @returns {string}
- * @throws {ValidationError} when `minutes` is not a finite number or `style` is unknown
+ * @throws {ValidationError} when `minutes` is not a finite number, `style` is unknown or `locale` is not a valid tag
  */
 export function formatDuration(minutes, options = {}) {
   options = opts(options);
@@ -504,6 +552,7 @@ export function formatDuration(minutes, options = {}) {
       value: options.style,
     });
   }
+  assertLocale(options.locale);
   const total = Math.round(Math.abs(minutes));
   const sign = minutes < 0 && total > 0 ? '-' : '';
   const m = total % 60;
@@ -526,7 +575,7 @@ export function formatDuration(minutes, options = {}) {
 /**
  * Minutes from `a` to `b` (negative when `b` is earlier). Offset‑aware when both carry an offset
  * (`06:45+05:30 → 09:30+04:00` is 225 min); when either is offset‑less both are compared as a same‑zone
- * wall clock. Rounded to whole minutes.
+ * wall clock. Rounded to whole minutes, symmetrically (`durationBetween(b, a) === -durationBetween(a, b)`).
  * @param {DateInput} a
  * @param {DateInput} b
  * @returns {number}
@@ -539,7 +588,7 @@ export function durationBetween(a, b) {
     pa.offsetMinutes !== null && pb.offsetMinutes !== null
       ? epochMs(pb) - epochMs(pa)
       : pb.wall.getTime() - pa.wall.getTime();
-  return Math.round(diff / MINUTE) || 0;
+  return roundSym(diff / MINUTE);
 }
 
 /**
@@ -551,7 +600,9 @@ export function durationBetween(a, b) {
  * @throws {ValidationError}
  */
 export function dayDiff(a, b) {
-  return dayNumber(toParsed(b, 'b').wall) - dayNumber(toParsed(a, 'a').wall);
+  const pa = toParsed(a, 'a');
+  const pb = toParsed(b, 'b');
+  return dayNumber(pb.wall) - dayNumber(pa.wall);
 }
 
 /**
@@ -608,7 +659,7 @@ export function addDays(d, n) {
   if (!isFiniteNumber(n)) {
     throw invalid('Expected n to be a finite number of days', 'n', 'invalid_number', { value: n });
   }
-  return keyOfWall(new Date(Date.UTC(y, m - 1, day + Math.trunc(n))));
+  return keyOfWall(utcDate(y, m, day + Math.trunc(n)));
 }
 
 /**
@@ -693,7 +744,7 @@ export function fromDateKey(d) {
  * @throws {ValidationError} when `min` is after `max`
  */
 export function clampDate(d, min, max) {
-  const key = toDateKey(d);
+  const key = keyOfWall(toParsed(d, 'd').wall);
   const lo = min === undefined || min === null ? null : keyOfWall(toParsed(min, 'min').wall);
   const hi = max === undefined || max === null ? null : keyOfWall(toParsed(max, 'max').wall);
   if (lo !== null && hi !== null && lo > hi) {
@@ -734,8 +785,7 @@ export function monthMatrix(year, month, options = {}) {
       { value: options.firstDay }
     );
   }
-  const first = new Date(Date.UTC(year, month - 1, 1));
-  if (year < 100) first.setUTCFullYear(year);
+  const first = utcDate(year, month, 1);
   const lead = (first.getUTCDay() - firstDay + 7) % 7;
   const days = daysInMonth(year, month);
   /** @type {(DateStr|null)[]} */
@@ -762,15 +812,15 @@ function relativeUnit(diffMs) {
   const sign = diffMs < 0 ? -1 : 1;
   if (abs < 45 * SECOND) return [0, 'second'];
   if (abs < 90 * SECOND) return [sign, 'minute'];
-  if (abs < 45 * MINUTE) return [Math.round(diffMs / MINUTE), 'minute'];
+  if (abs < 45 * MINUTE) return [roundSym(diffMs / MINUTE), 'minute'];
   if (abs < 90 * MINUTE) return [sign, 'hour'];
-  if (abs < 22 * HOUR) return [Math.round(diffMs / HOUR), 'hour'];
+  if (abs < 22 * HOUR) return [roundSym(diffMs / HOUR), 'hour'];
   if (abs < 36 * HOUR) return [sign, 'day'];
-  if (abs < 26 * DAY) return [Math.round(diffMs / DAY), 'day'];
+  if (abs < 26 * DAY) return [roundSym(diffMs / DAY), 'day'];
   if (abs < 45 * DAY) return [sign, 'month'];
-  if (abs < 320 * DAY) return [Math.round(diffMs / (30.4375 * DAY)), 'month'];
+  if (abs < 320 * DAY) return [roundSym(diffMs / (30.4375 * DAY)), 'month'];
   if (abs < 548 * DAY) return [sign, 'year'];
-  return [Math.round(diffMs / (365.25 * DAY)), 'year'];
+  return [roundSym(diffMs / (365.25 * DAY)), 'year'];
 }
 
 /**
@@ -807,13 +857,16 @@ export function relativeTime(dt, options = {}) {
  * Tick `onTick(remainingMs)` once immediately and then every `intervalMs` until `until` is reached, when
  * a final `onTick(0)` fires and the timer stops by itself. `until` is a `DateTime` or an epoch‑ms
  * timestamp. Returns an idempotent `stop()` that clears the interval. Timers come from `options.timers`
- * (`{ setInterval, clearInterval }`) or the globals, looked up at call time; `options.now` injects the
- * clock. **Effects: timer** (cleared by `stop()` or on expiry).
+ * (`{ setInterval, clearInterval }`, both required when given) or the globals, looked up at call time;
+ * `options.now` injects the clock (a function returning epoch ms). If `onTick` throws, the countdown
+ * stops itself before the error propagates, so a failing callback is reported once rather than on
+ * every tick. **Effects: timer** (cleared by `stop()`, on expiry, or when `onTick` throws).
  * @param {DateInput|number} until
  * @param {(remainingMs: number) => void} onTick
  * @param {{ intervalMs?: number, timers?: IntervalTimers, now?: () => number }} [options]
  * @returns {() => void} stop
- * @throws {ValidationError} when `onTick` is not a function, `intervalMs` is not positive or `until` is invalid
+ * @throws {ValidationError} when `onTick` is not a function, `intervalMs` is not positive, `until` is
+ *   invalid, `timers` lacks `setInterval` / `clearInterval` or `now` is not a function
  */
 export function countdown(until, onTick, options = {}) {
   options = opts(options);
@@ -827,11 +880,31 @@ export function countdown(until, onTick, options = {}) {
     });
   }
   const target = isFiniteNumber(until) ? until : epochMs(toParsed(until, 'until'));
+  if (options.now !== undefined && options.now !== null && typeof options.now !== 'function') {
+    throw invalid('Expected now to be a function returning epoch ms', 'now', 'invalid_option', {
+      value: options.now,
+    });
+  }
+  /** @type {() => number} */
   const clock = typeof options.now === 'function' ? options.now : Date.now;
-  const owner =
-    options.timers && typeof options.timers.setInterval === 'function'
-      ? options.timers
-      : globalThis;
+  /** @type {IntervalTimers|typeof globalThis} */
+  let owner = globalThis;
+  if (options.timers !== undefined && options.timers !== null) {
+    const t = options.timers;
+    if (
+      typeof t !== 'object' ||
+      typeof t.setInterval !== 'function' ||
+      typeof t.clearInterval !== 'function'
+    ) {
+      throw invalid(
+        'Expected timers to provide both setInterval and clearInterval',
+        'timers',
+        'invalid_option',
+        { value: t }
+      );
+    }
+    owner = t;
+  }
   /** @type {ReturnType<typeof setInterval>|null} */
   let handle = null;
   let stopped = false;
@@ -850,7 +923,12 @@ export function countdown(until, onTick, options = {}) {
     if (stopped) return;
     const remaining = Math.max(0, target - clock());
     if (remaining <= 0) stop();
-    onTick(remaining);
+    try {
+      onTick(remaining);
+    } catch (e) {
+      stop();
+      throw e;
+    }
   }
 
   tick();
@@ -881,16 +959,23 @@ export function ageAt(dob, on) {
  * (defaults 2 / 12 when a rule is missing). Seated infants (`INS`) and fare‑based types (`YTH`, `SRC`,
  * `STU`) are choices, not ages, and are never returned.
  * @param {number} age
- * @param {AgeRules|Partial<AgeRules>} [rules]
+ * @param {AgeRules|Partial<AgeRules>|null} [rules]
  * @returns {PaxType}
- * @throws {ValidationError} on a negative or non‑numeric age
+ * @throws {ValidationError} on a negative or non‑numeric age, or bands with `infantMax > childMax` / below 0
  */
 export function paxTypeForAge(age, rules) {
   if (!isFiniteNumber(age) || age < 0) {
     throw invalid('Expected age to be a non-negative number', 'age', 'invalid_age', { value: age });
   }
-  const infantMax = rules && isFiniteNumber(rules.infantMax) ? rules.infantMax : DEFAULT_INFANT_MAX;
-  const childMax = rules && isFiniteNumber(rules.childMax) ? rules.childMax : DEFAULT_CHILD_MAX;
+  const r = opts(rules);
+  const infantMax = isFiniteNumber(r.infantMax) ? r.infantMax : DEFAULT_INFANT_MAX;
+  const childMax = isFiniteNumber(r.childMax) ? r.childMax : DEFAULT_CHILD_MAX;
+  if (infantMax < 0 || childMax < 0 || infantMax > childMax) {
+    throw invalid('Expected age bands with 0 <= infantMax <= childMax', 'rules', 'invalid_rules', {
+      infantMax,
+      childMax,
+    });
+  }
   if (age < infantMax) return 'INF';
   if (age < childMax) return 'CHD';
   return 'ADT';

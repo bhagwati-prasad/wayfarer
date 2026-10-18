@@ -31,6 +31,9 @@ Back to initial state (all slices when omitted). Effects: state · storage remov
 #### `store.registerSlice(name, { initial, persist?: { storage?: 'local'|'session'|'memory', ttlMs?, pick?: string[] }, migrate?(old, version) }) → void`
 Used by modules at install time; idempotent. Effects: state (initial) · storage read.
 
+#### `store.hasSlice(name) → boolean`
+Whether a slice is registered (used by `auth/session.js` before touching `account`). Effects: none.
+
 #### `store.use(middleware: (ctx: { slice, action, prev, next }, proceed) => void) → off`
 Wrap every commit (logging, analytics, devtools). Effects: none.
 
@@ -41,7 +44,7 @@ Effects: storage write / read / remove.
 Serialisable copy (persisted + transient slices, minus secrets). Effects: state (restore) · emit `state:change`.
 
 #### `store.getSnapshot() → State` · `store.toObservable(selector?) → { subscribe(observer) → { unsubscribe() } }`
-Framework interop kept dependency‑free: `subscribe` + `getSnapshot` are `useSyncExternalStore`‑compatible (React), the store is a valid Svelte store contract, `toObservable` follows the TC39/RxJS observable contract (Angular `async` pipe, Vue `from`). The later `bindings/react|vue|angular.js` wrappers are thin layers over these. Effects: none.
+Framework interop kept dependency‑free: `subscribe` + `getSnapshot` are `useSyncExternalStore`‑compatible (React); Svelte binds `toObservable()` (its `$store` syntax calls `subscribe(run, invalidate)` with two functions, which the store itself reads as the selector form above); `toObservable` follows the TC39/RxJS observable contract (Angular `async` pipe, Vue `from`). The later `bindings/react|vue|angular.js` wrappers are thin layers over these. Effects: none.
 
 #### `store.destroy() → void`
 Effects: storage flush · listeners cleared.
@@ -53,8 +56,8 @@ Effects: none.
 
 ## 2. `events/emitter.js`
 
-#### `createEmitter({ logger? }) → Emitter`
-Effects: none.
+#### `createEmitter({ logger?, now? }) → Emitter`
+`now` is the injectable clock (ms) stamped on `payload.at` (the client passes its own). Effects: none.
 
 #### `emitter.on(event: string | string[], fn) → off` · `emitter.once(event, fn) → off` · `emitter.off(event, fn?) → void`
 Supports exact names, namespace wildcards (`'search:*'`) and `'*'`. Effects: none.
@@ -63,7 +66,7 @@ Supports exact names, namespace wildcards (`'search:*'`) and `'*'`. Effects: non
 Synchronous fan‑out; listener exceptions are caught and re‑emitted as `error` (never thrown to the emitter). Effects: emit.
 
 #### `emitter.waitFor(event, { timeoutMs?, filter?, signal? }) → Promise<payload>`
-Resolve on next matching event. Effects: timer. Throws: `TimeoutError`, `AbortError`.
+Resolve on next matching event. Never throws synchronously. Effects: timer. Rejects: `TimeoutError`, `AbortError` (signal, or `clear()`), `ValidationError` (bad arguments), the wrapped `SdkError` when `filter` throws.
 
 #### `emitter.listenerCount(event?) → number` · `emitter.clear() → void`
 Effects: none / listeners cleared.
@@ -91,8 +94,8 @@ SdkError            { code, message, cause?, requestId?, retryable: boolean, det
 │  ├─ OfferUnavailableError{ offerId, reason: 'sold_out'|'withdrawn'|'schedule_changed' }
 │  ├─ PriceChangedError    { from: Money, to: Money, newOfferId?, itineraryId? }
 │  ├─ ItineraryExpiredError{ itineraryId }
-│  ├─ BookingError         { stage: 'create'|'hold'|'confirm'|'ticketing', recoverable, suggestedAction }
-│  ├─ PaymentError         { reason: 'declined'|'insufficient_funds'|'authentication_failed'|'expired'|'cancelled'|'gateway'|'fraud'|'method_unavailable', retryable }
+│  ├─ BookingError         { stage: 'create'|'hold'|'confirm'|'ticketing', recoverable, suggestedAction: 'retry_payment'|'search_again'|'contact_support'|'wait' }
+│  ├─ PaymentError         { reason: 'declined'|'insufficient_funds'|'authentication_failed'|'requires_action'|'expired'|'cancelled'|'gateway'|'fraud'|'method_unavailable', retryable }   // 'requires_action' ← code PAYMENT_REQUIRES_ACTION (3‑DS / UPI step pending)
 │  ├─ ServicingError       { action: TripAction, reason }
 │  └─ UnprocessableError   { fieldErrors }
 ```
@@ -119,8 +122,8 @@ Canonical backend codes the SDK understands (`OFFER_EXPIRED`, `PRICE_CHANGED`, `
 
 ## 4. `storage/adapters.js`
 
-#### `createStorage({ driver: 'memory'|'local'|'session'|'cookie'|StorageAdapter, namespace = 'wf', serializer?, defaultTtlMs?, onUnavailable? }) → Storage`
-Namespaced, TTL‑aware key/value facade; falls back to memory when the browser driver throws (private mode, quota).
+#### `createStorage({ driver: 'memory'|'local'|'session'|'cookie'|StorageAdapter, namespace = 'wf', serializer?, defaultTtlMs?, onUnavailable?, events?, now? }) → Storage`
+Namespaced, TTL‑aware key/value facade; falls back to memory when the browser driver throws (private mode, quota). `events` receives `storage:unavailable`; `now` is the injectable clock for TTLs.
 Effects: storage probe write · emit `storage:unavailable` on fallback.
 
 #### `storage.get<T>(key) → T|undefined` · `storage.set(key, value, { ttlMs? }) → void` · `storage.remove(key) → void` · `storage.has(key) → boolean`
@@ -132,5 +135,8 @@ Effects: storage (clear).
 #### `storage.subscribe(key, fn) → off`
 Cross‑tab change notifications (`storage` event) for `local` driver. Effects: none.
 
-#### `memoryDriver()` · `webStorageDriver(area: Storage)` · `cookieDriver({ domain?, secure?, sameSite? })`
+#### `storage.destroy() → void`
+Drop every subscriber and the window `storage` listener (data is kept). Called by `client.destroy()` for each facade it created. Effects: none.
+
+#### `memoryDriver()` · `webStorageDriver(area: Storage)` · `cookieDriver({ domain?, secure?, sameSite?, path?, maxAgeSec? })`
 `StorageAdapter = { getItem, setItem, removeItem, keys?, name }`. Effects: none until used.

@@ -238,6 +238,17 @@ describe('singleFlight', () => {
     expect(() => singleFlight(null, 'x')).toThrow(ValidationError);
     expect(() => singleFlight('x', fn)).toThrow(ValidationError);
   });
+
+  it('a throwing keyFn rejects instead of throwing synchronously', async () => {
+    const boom = new Error('bad key');
+    const fn = vi.fn(async () => 'never');
+    const go = singleFlight(() => {
+      throw boom;
+    }, fn);
+    const p = go('x');
+    await expect(p).rejects.toBe(boom);
+    expect(fn).not.toHaveBeenCalled();
+  });
 });
 
 // ── retry ────────────────────────────────────────────────────────────────────────────────────────
@@ -424,6 +435,43 @@ describe('retry', () => {
     await expect(retry(async () => 1, { factor: 0 })).rejects.toBeInstanceOf(ValidationError);
     await expect(retry(async () => 1, { retries: -1 })).rejects.toBeInstanceOf(ValidationError);
     await expect(retry(async () => 1, { retryOn: 1 })).rejects.toBeInstanceOf(ValidationError);
+    for (const jitter of ['bogus', 42, {}]) {
+      const err = await retry(async () => 1, { jitter }).catch((e) => e);
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err.issues[0]).toMatchObject({ path: 'jitter', code: 'type' });
+    }
+    const fn = vi.fn(async () => 1);
+    const err = await retry(fn, { signal: 'abort' }).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ path: 'signal', code: 'type' });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('clamps every delay to 2^31 − 1 ms so a huge Retry-After or back-off never fires at once', async () => {
+    const MAX = 2 ** 31 - 1;
+    const delays = [];
+    const fn = vi.fn(async (attempt) => {
+      if (attempt === 1) throw new RateLimitError('slow down', { retryAfterMs: 1e12 });
+      if (attempt === 2) throw new Error('again');
+      return 'ok';
+    });
+    const p = retry(fn, {
+      retries: 2,
+      baseMs: 1e9,
+      factor: 1e9, // attempt 2 would wait 1e18 ms
+      maxMs: Infinity,
+      jitter: false,
+      onRetry: (_e, _a, d) => delays.push(d),
+    });
+    await tick(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // the 1e12 ms wait did not collapse to ~1 ms
+    await tick(MAX - 1000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await tick(MAX);
+    expect(fn).toHaveBeenCalledTimes(3);
+    await expect(p).resolves.toBe('ok');
+    expect(delays).toEqual([MAX, MAX]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -509,11 +557,28 @@ describe('poll', () => {
     await tick(400);
     await p2;
     expect(custom).toEqual([100, 300, null]);
+
+    const plain = [];
+    const p3 = poll(statusAfter(2), {
+      intervalMs: 100,
+      backoff: null, // same as omitting it
+      until: complete,
+      onTick: (_r, info) => plain.push(info.nextDelayMs),
+    });
+    await tick(100);
+    await p3;
+    expect(plain).toEqual([100, null]);
   });
 
-  it('rejects with TimeoutError{POLL_EXHAUSTED} after maxAttempts', async () => {
+  it('rejects with TimeoutError{POLL_EXHAUSTED} after maxAttempts (onTick sees no next delay)', async () => {
     const fn = statusAfter(Infinity);
-    const p = poll(fn, { intervalMs: 100, until: complete, maxAttempts: 3 });
+    const delays = [];
+    const p = poll(fn, {
+      intervalMs: 100,
+      until: complete,
+      maxAttempts: 3,
+      onTick: (_r, info) => delays.push(info.nextDelayMs),
+    });
     const assertion = expect(p).rejects.toMatchObject({
       name: 'TimeoutError',
       code: 'POLL_EXHAUSTED',
@@ -523,6 +588,7 @@ describe('poll', () => {
     await assertion;
     expect(fn).toHaveBeenCalledTimes(3);
     expect(fn.mock.calls[2][1].signal.aborted).toBe(true);
+    expect(delays).toEqual([100, 100, null]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -659,6 +725,35 @@ describe('poll', () => {
     await expect(
       poll(statusAfter(1), { until: complete, maxAttempts: 1.5 })
     ).rejects.toBeInstanceOf(ValidationError);
+    const fn = statusAfter(1);
+    const bad = await poll(fn, { until: complete, signal: 'x' }).catch((e) => e);
+    expect(bad).toBeInstanceOf(ValidationError);
+    expect(bad.issues[0]).toMatchObject({ path: 'signal', code: 'type' });
+    expect(fn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clamps a huge retryAfterMs / interval to 2^31 − 1 ms instead of polling at once', async () => {
+    const MAX = 2 ** 31 - 1;
+    const results = [
+      { status: 'pending', retryAfterMs: 1e12 },
+      { status: 'pending' },
+      { status: 'complete' },
+    ];
+    const fn = vi.fn(async (attempt) => results[attempt - 1]);
+    const delays = [];
+    const p = poll(fn, {
+      intervalMs: 1e10,
+      until: complete,
+      onTick: (_r, info) => delays.push(info.nextDelayMs),
+    });
+    await tick(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // the 1e12 ms wait did not collapse to ~1 ms
+    await tick(MAX - 1000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await tick(MAX);
+    await expect(p).resolves.toEqual({ status: 'complete' });
+    expect(delays).toEqual([MAX, MAX, null]);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -732,6 +827,43 @@ describe('withTimeout', () => {
       ValidationError
     );
   });
+
+  it('an already-aborted or invalid signal rejects at once and still consumes the input', async () => {
+    const pre = new AbortController();
+    pre.abort('gone');
+    const late = deferred();
+    await expect(withTimeout(late.promise, 10, pre.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+      reason: 'gone',
+    });
+    late.reject(new Error('nobody listens')); // must not surface as an unhandled rejection
+    const thunk = vi.fn();
+    await expect(withTimeout(thunk, 10, pre.signal)).rejects.toBeInstanceOf(AbortError);
+    expect(thunk).not.toHaveBeenCalled();
+    const invalid = deferred();
+    const err = await withTimeout(invalid.promise, 10, 'nope').catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ path: 'signal', code: 'type' });
+    invalid.reject(new Error('also swallowed'));
+    await tick(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clamps ms above 2^31 − 1 so the timeout does not fire at once', async () => {
+    const MAX = 2 ** 31 - 1;
+    const p = withTimeout(new Promise(() => {}), 1e12);
+    let settled = false;
+    const assertion = expect(p).rejects.toMatchObject({ name: 'TimeoutError', timeoutMs: 1e12 });
+    p.catch(() => {
+      settled = true;
+    });
+    await tick(1000);
+    expect(settled).toBe(false);
+    await tick(MAX - 1000);
+    await assertion;
+    expect(settled).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 // ── sleep ────────────────────────────────────────────────────────────────────────────────────────
@@ -796,6 +928,21 @@ describe('sleep', () => {
     await assertion;
     await expect(sleep(-1)).rejects.toBeInstanceOf(ValidationError);
     await expect(sleep('soon')).rejects.toBeInstanceOf(ValidationError);
+    const err = await sleep(10, 'nope').catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ path: 'signal', code: 'type' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('clamps ms above 2^31 − 1 instead of resolving after ~1 ms', async () => {
+    const MAX = 2 ** 31 - 1;
+    const done = vi.fn();
+    sleep(2 ** 31).then(done);
+    await tick(1000);
+    expect(done).not.toHaveBeenCalled();
+    await tick(MAX - 1000);
+    expect(done).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -879,8 +1026,29 @@ describe('combineSignals', () => {
     }
   });
 
+  it('accepts signal-like objects from another realm through the listener fallback', () => {
+    class ForeignSignal extends EventTarget {
+      aborted = false;
+      reason = undefined;
+      abort(reason) {
+        this.aborted = true;
+        this.reason = reason;
+        this.dispatchEvent(new Event('abort'));
+      }
+    }
+    const foreign = new ForeignSignal();
+    const real = new AbortController();
+    const combined = combineSignals(real.signal, foreign);
+    expect(combined).toBeInstanceOf(AbortSignal);
+    expect(combined.aborted).toBe(false);
+    foreign.abort('foreign');
+    expect(combined.aborted).toBe(true);
+    expect(combined.reason).toBe('foreign');
+  });
+
   it('rejects non-signal inputs with ValidationError', () => {
     expect(() => combineSignals({})).toThrow(ValidationError);
+    expect(() => combineSignals({ aborted: false })).toThrow(ValidationError);
     expect(() => combineSignals('abort')).toThrow(ValidationError);
   });
 });
@@ -910,6 +1078,11 @@ describe('timeoutSignal', () => {
     expect(combined.reason).toBeInstanceOf(TimeoutError);
     expect(() => timeoutSignal(-1)).toThrow(ValidationError);
     expect(() => timeoutSignal()).toThrow(ValidationError);
+    expect(() => timeoutSignal('soon')).toThrow(ValidationError);
+    const never = timeoutSignal(Infinity);
+    expect(never).toBeInstanceOf(AbortSignal);
+    expect(never.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -920,7 +1093,7 @@ describe('isAbort', () => {
     expect(isAbort(new AbortError('x'))).toBe(true);
     expect(isAbort(new DOMException('aborted', 'AbortError'))).toBe(true);
     expect(isAbort({ code: 'ABORTED' })).toBe(true);
-    expect(isAbort({ code: 20 })).toBe(true);
+    expect(isAbort({ code: 20 })).toBe(false); // a bare numeric code is not an abort
     expect(isAbort(new TimeoutError('t'))).toBe(false);
     expect(isAbort(new Error('AbortError'))).toBe(false);
     expect(isAbort(null)).toBe(false);
@@ -1042,6 +1215,13 @@ describe('createQueue', () => {
     expect(() => createQueue({ concurrency: 1.5 })).toThrow(ValidationError);
     expect(() => createQueue({ concurrency: Infinity })).not.toThrow();
     await expect(createQueue().add('nope')).rejects.toBeInstanceOf(ValidationError);
+    const q = createQueue();
+    const fn = vi.fn(() => 1);
+    const err = await q.add(fn, { signal: 'nope' }).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.issues[0]).toMatchObject({ path: 'signal', code: 'type' });
+    expect(fn).not.toHaveBeenCalled();
+    expect(q.size).toBe(0);
   });
 });
 
@@ -1112,19 +1292,56 @@ describe('memoAsync', () => {
     expect(fn).toHaveBeenCalledTimes(4);
   });
 
-  it('default key covers no-arg, primitive and object arguments', async () => {
+  it('default key tells no-arg, primitive and object arguments apart (1 ≠ "1")', async () => {
     const fn = vi.fn(async (...args) => args.length);
     const m = memoAsync(fn);
     await m();
     await m();
+    expect(fn).toHaveBeenCalledTimes(1);
     await m(1);
     await m('1');
+    await m(1);
+    await m('1');
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(fn.mock.calls.slice(1)).toEqual([[1], ['1']]);
+    expect(m.has(1)).toBe(true);
+    expect(m.has('1')).toBe(true);
+    await m(null);
+    expect(fn).toHaveBeenCalledTimes(4);
     await m({ a: 1 });
     await m({ a: 1 });
     await m({ a: 2 });
-    expect(fn).toHaveBeenCalledTimes(4);
+    await m({ a: 1 }, 'page');
+    await m(1, '1');
+    await m('1', 1);
+    await m(1, '1');
+    expect(fn).toHaveBeenCalledTimes(9);
     expect(() => memoAsync('x')).toThrow(ValidationError);
     expect(() => memoAsync(fn, { ttlMs: -1 })).toThrow(ValidationError);
     expect(() => memoAsync(fn, { keyFn: 'x' })).toThrow(ValidationError);
+  });
+
+  it('a throwing keyFn rejects instead of throwing synchronously', async () => {
+    const boom = new Error('bad key');
+    const fn = vi.fn(async () => 1);
+    const m = memoAsync(fn, {
+      keyFn: () => {
+        throw boom;
+      },
+    });
+    const p = m('x');
+    await expect(p).rejects.toBe(boom);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('sweeps expired entries on the next miss so stale keys do not pile up', async () => {
+    vi.setSystemTime(0);
+    const m = memoAsync(async (k) => k, { ttlMs: 100 });
+    await m('a');
+    await tick(101);
+    expect(m.has('a')).toBe(false);
+    await m('b'); // a miss: every expired entry is dropped
+    expect(m.delete('a')).toBe(false);
+    expect(m.delete('b')).toBe(true);
   });
 });

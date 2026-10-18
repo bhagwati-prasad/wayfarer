@@ -16,7 +16,7 @@ type Phase      = 'upcoming'|'past'|'cancelled'
 
 // ── request plumbing ──────────────────────────────────────────────────────
 interface RequestOpts {
-  signal?: AbortSignal; timeoutMs?: number; retries?: number; retryOn?: (err: SdkError, attempt: number) => boolean;
+  signal?: AbortSignal; timeoutMs?: number; retries?: number; retryOn?: (err: SdkError, attempt: number, ctx?: HttpContext) => boolean;
   headers?: Record<string,string>; query?: Record<string,unknown>;
   idempotencyKey?: string | true;            // true = derive from payload
   cache?: false | { ttlMs: number; key?: string }; dedupe?: boolean;
@@ -124,7 +124,7 @@ interface TravelerRequirements { perType: Record<PaxType, { fields: FieldRule[];
   contact: FieldRule[]; apis: boolean; gstAvailable: boolean; ageRules: AgeRules; nameRules: { maxLength: number; charset: 'latin'|'any' } }
 interface FieldRule { path: string; required: boolean; pattern?: string; options?: string[] }
 interface DocumentRule { types: TravelDocument['type'][]; required: boolean; minValidityMonths?: number }
-interface AgeRules { infantMax: number; childMax: number; refDate: 'departure'|'return'; infantPerAdult: number; maxPax: number }
+interface AgeRules { infantMax: number; childMax: number; refDate: 'departure'|'return'; infantPerAdult: number; maxPax: number }   // infantMax / childMax are EXCLUSIVE upper bounds in years: age < infantMax → INF, infantMax <= age < childMax → CHD
 interface Traveler { id?: string; slotId?: string; type: PaxType; title?: string; firstName: string; middleName?: string; lastName: string;
   gender: 'M'|'F'|'X'; dob: DateStr; nationality?: string; documents?: TravelDocument[]; loyalty?: LoyaltyAccount[];
   knownTravelerNumber?: string; redressNumber?: string; mealPref?: string; seatPref?: string; assistance?: string[];
@@ -187,7 +187,7 @@ interface GatewayAdapter { name: string; load(opts: object): Promise<void>; moun
   handleAction?(action: PaymentAction, host: HTMLElement): Promise<{ status: string; payload?: object }>; unmount?(el: GatewayElement): void }
 interface GatewayElement { el: HTMLElement; isComplete(): boolean; on(evt: 'change'|'ready'|'error', fn: Function): () => void }
 // The isolated payments package implements this port; domain modules depend on nothing else from it.
-interface PaymentsPort { methods; quote; credits; emiPlans; createIntent; mount; tokenize; confirm; handleAction; waitForResult; pay; resumeAfterRedirect; cancel; retry; intent; status; savedMethods; receipt; refunds; gateways; clear }  // see 07-booking.md §2
+interface PaymentsPort { methods; quote; credits; emiPlans; createIntent; mount; tokenize; confirm; handleAction; waitForResult; pay; resumeAfterRedirect; cancel; retry; intent; status; quoteState; savedMethods; receipt; refunds; gateways; validateCard; cardBrand; clear }  // see 07-booking.md §2
 // RFC 9457 problem document as returned by the backend (extension members: code, errors, requestId)
 interface Problem { type: string; title: string; status: number; detail?: string; instance?: string; code?: string; requestId?: string;
   errors?: { code?: string|number; title?: string; detail?: string; source?: { pointer?: string; parameter?: string; example?: string } }[]; [ext: string]: unknown }
@@ -245,7 +245,7 @@ interface ClientConfig {
   payments?: PaymentsPort;               // from @wayfarer/sdk/payments: createPayments({ gateways: [stripe(), paypal(), razorpay()], returnUrl })
   telemetry?: { adapters?: TelemetryAdapter[]; enabled?: boolean; sampleRate?: number };
   features?: Record<string, boolean|string>; i18n?: { messages?: object; fallback?: string };
-  logger?: { level: 'silent'|'error'|'warn'|'info'|'debug'; sink?: Function; redact?: string[] };
+  logger?: { level: 'silent'|'error'|'warn'|'info'|'debug'; sink?: Function | Pick<Console, 'debug'|'info'|'warn'|'error'>; redact?: string[] };
   autoBootstrap?: boolean; plugins?: Plugin[]; devtools?: boolean
 }
 interface Plugin { name: string; install(client: OtaClient): void | (() => void) }

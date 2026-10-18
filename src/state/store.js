@@ -11,15 +11,21 @@
  * identity. `registerSlice` is idempotent, hydrates persisted slices from the injected storage
  * (`{ storage }` is a `StorageFacade` from storage/adapters.js or a factory `(kind) => StorageFacade`
  * so `'local'` / `'session'` / `'memory'` can differ) and honours `persist: { storage, ttlMs, pick,
- * migrate }`; writes are debounced through injectable timers. `snapshot()` / `restore()` skip slices
- * flagged `secret` (session tokens). `toObservable(selector?)` follows the TC39 / RxJS observable
- * contract (`subscribe(observer | fn) → { unsubscribe }`, `Symbol.observable` when defined) and emits
- * the current value on subscribe, which also makes it a valid Svelte store. `devtools: true` logs
- * every commit through the optional logger. SSR‑safe: no `window` / `document` / `localStorage`
- * access (storage is injected), no module‑level mutable state, no `console.*`; errors are
- * `ConfigError` (install‑time options) and `ValidationError` (call arguments) from
- * `../errors/index.js`, and listener exceptions are routed to the `error` event / logger instead of
- * breaking a commit. Persistence failures never escape either: they are logged and the state stands.
+ * migrate }`; writes are debounced through injectable timers. Stored and restored data can never
+ * change a slice's shape: a plain‑object / array slice only accepts plain‑object / array data, and
+ * `restore()` deep‑copies what it applies so a caller‑held snapshot is never aliased by the state.
+ * `snapshot()` / `restore()` skip slices flagged `secret` (session tokens). `toObservable(selector?)`
+ * follows the TC39 / RxJS observable contract (`subscribe(observer | next, error?, complete?) →
+ * { unsubscribe }`, `Symbol.observable` when defined) and emits the current value on subscribe,
+ * which also makes it the Svelte store contract (`store.subscribe` itself keeps the documented
+ * `(selector, listener)` form, so Svelte binds to `toObservable()`). `devtools: true` logs every
+ * commit through the optional logger. SSR‑safe: no `window` / `document` / `localStorage` access
+ * (storage is injected), no module‑level mutable state, no `console.*`; errors are `ConfigError`
+ * (install‑time options) and `ValidationError` (call arguments) from `../errors/index.js`, and
+ * listener / selector / equality exceptions are routed to the `error` event / logger instead of
+ * breaking a commit or escaping the notification microtask. Persistence failures never escape
+ * either: they are logged and the state stands. After `destroy()` reads keep working and writes
+ * still update the state, but nothing is retained for notification or persistence.
  */
 
 import { ConfigError, ValidationError, isSdkError, wrap } from '../errors/index.js';
@@ -152,8 +158,9 @@ export { shallowEqual };
 
 /**
  * TC39 / RxJS observable contract: `subscribe` emits the current value synchronously, then every
- * change of the selected value; `complete` fires on `store.destroy()`.
- * @typedef {{ subscribe: (observer: Observer | ((value: any) => void)) => Subscription }} Observable
+ * change of the selected value; `complete` fires on `store.destroy()`. Accepts an observer object or
+ * the positional `(next?, error?, complete?)` form.
+ * @typedef {{ subscribe: (observer?: Observer | ((value: any) => void) | null, error?: (error: unknown) => void, complete?: () => void) => Subscription }} Observable
  */
 
 /**
@@ -167,8 +174,10 @@ export { shallowEqual };
 /**
  * @typedef {Object} StorePersist
  * @property {() => Promise<void>} flush  Write every pending persisted slice now.
- * @property {(slice?: string) => Promise<void>} hydrate  Re‑read storage into the slice(s), discarding pending writes.
- * @property {(slice?: string) => void} clear  Remove the persisted copy of the slice(s).
+ * @property {(slice?: string) => Promise<void>} hydrate  Re‑read storage into the slice(s). Stored data
+ *   replaces the slice and makes a write still pending for it obsolete; when nothing (valid) is stored
+ *   the slice and its pending write are left alone. Rejects with `ValidationError` on an unknown slice.
+ * @property {(slice?: string) => void} clear  Remove the persisted copy of the slice(s) and cancel pending writes.
  */
 
 /**
@@ -385,14 +394,45 @@ function isEnvelope(value) {
 }
 
 /**
- * Normalises an observer argument (`fn` → `{ next: fn }`).
- * @param {unknown} observer
+ * Normalises the arguments of `subscribe`: an observer object, or the positional
+ * `(next?, error?, complete?)` functions of the TC39 / RxJS contract.
+ * @param {unknown} observer @param {unknown} [error] @param {unknown} [complete]
  * @returns {Observer}
  */
-function toObserver(observer) {
-  if (typeof observer === 'function') return { next: /** @type {(v: any) => void} */ (observer) };
+function toObserver(observer, error, complete) {
   if (observer && typeof observer === 'object') return /** @type {Observer} */ (observer);
-  throw invalid('toObservable: subscribe needs an observer object or a next function', 'observer');
+  if (observer !== undefined && observer !== null && typeof observer !== 'function') {
+    throw invalid(
+      'toObservable: subscribe needs an observer object or a next function',
+      'observer'
+    );
+  }
+  /** @type {Observer} */
+  const out = {};
+  if (typeof observer === 'function') out.next = /** @type {(v: any) => void} */ (observer);
+  if (typeof error === 'function') out.error = /** @type {(e: unknown) => void} */ (error);
+  if (typeof complete === 'function') out.complete = /** @type {() => void} */ (complete);
+  if (!out.next && !out.error && !out.complete) {
+    throw invalid(
+      'toObservable: subscribe needs an observer object or a next function',
+      'observer'
+    );
+  }
+  return out;
+}
+
+/**
+ * Whether `data` may stand in for `current`: a plain‑object slice only accepts plain objects, an array
+ * slice only arrays (so tampered storage or a foreign snapshot can never change a slice's shape);
+ * picked paths are read from a plain object; any other slice value accepts anything.
+ * @param {unknown} current @param {unknown} data @param {string[] | null} pick
+ * @returns {boolean}
+ */
+function compatible(current, data, pick) {
+  if (pick) return isPlainObject(data);
+  if (isPlainObject(current)) return isPlainObject(data);
+  if (Array.isArray(current)) return Array.isArray(data);
+  return true;
 }
 
 // ── store ───────────────────────────────────────────────────────────────────────────────────────
@@ -523,7 +563,15 @@ export function createStore(options = {}) {
     /** @type {StorageLike} */
     let storage;
     if (typeof opts.storage === 'function') {
-      storage = /** @type {StorageFactory} */ (opts.storage)(kind);
+      try {
+        storage = /** @type {StorageFactory} */ (opts.storage)(kind);
+      } catch (e) {
+        if (e instanceof ConfigError) throw e;
+        throw new ConfigError(`createStore: storage factory threw for '${kind}'`, {
+          cause: e,
+          details: { kind },
+        });
+      }
       if (!isStorageLike(storage)) {
         throw new ConfigError(`createStore: storage factory must return a Storage for '${kind}'`, {
           details: { kind },
@@ -542,17 +590,32 @@ export function createStore(options = {}) {
   // ── slices ──
 
   /**
+   * A usable slice name: non‑empty, addressable through `get('<slice>.<path>')` (no dots or brackets)
+   * and never an `Object.prototype` member (`__proto__`, `constructor`, `toString`, …), so a slice can
+   * neither pollute nor be shadowed by the prototype of the root object.
+   * @param {unknown} name
+   * @returns {name is string}
+   */
+  function isValidName(name) {
+    return (
+      typeof name === 'string' &&
+      name.length > 0 &&
+      !/[.[\]]/.test(name) &&
+      !UNSAFE_NAMES.has(name) &&
+      !(name in Object.prototype)
+    );
+  }
+
+  /**
    * @param {unknown} name
    * @returns {string}
    */
   function assertName(name) {
-    if (
-      typeof name !== 'string' ||
-      name.length === 0 ||
-      name.includes('.') ||
-      UNSAFE_NAMES.has(name)
-    ) {
-      throw invalid('store: slice name must be a non-empty string without dots', 'slice');
+    if (!isValidName(name)) {
+      throw invalid(
+        'store: slice name must be a non-empty string without dots or brackets and not an Object.prototype member',
+        'slice'
+      );
     }
     return name;
   }
@@ -601,6 +664,17 @@ export function createStore(options = {}) {
           details: { pick: conf.pick },
         });
       }
+      for (const path of conf.pick) {
+        // Same parser as the writes: an empty or prototype-polluting path fails here, not later.
+        try {
+          setPath({}, path, null);
+        } catch (e) {
+          throw new ConfigError(`${where}: persist.pick path '${path}' is not allowed`, {
+            cause: e,
+            details: { pick: path },
+          });
+        }
+      }
       pick = conf.pick.slice();
     }
     const rawVersion = sliceOptions.version !== undefined ? sliceOptions.version : conf.version;
@@ -619,6 +693,8 @@ export function createStore(options = {}) {
         ? persistDefaults.debounceMs
         : assertMs(conf.debounceMs, where, 'persist.debounceMs');
     const key = persistDefaults.prefix ? `${persistDefaults.prefix}:${name}` : name;
+    // Resolve the storage now: a broken factory must fail the registration before any state changes.
+    storageFor(kind);
     return { kind, key, ttlMs, pick, version, migrate, debounceMs };
   }
 
@@ -672,7 +748,7 @@ export function createStore(options = {}) {
    */
   function commit(name, next, action, meta) {
     /** @type {MiddlewareContext} */
-    const ctx = { slice: name, action, prev: state[name], next: freeze(next) };
+    const ctx = { slice: name, action, prev: current(name), next: freeze(next) };
     if (meta !== undefined) ctx.meta = meta;
     const chain = middlewares.slice();
     /** @param {number} i @param {MiddlewareContext} c */
@@ -691,15 +767,21 @@ export function createStore(options = {}) {
     run(0, ctx);
   }
 
+  /**
+   * The current value of a slice; `undefined` when it is not in the state yet (never an inherited
+   * `Object.prototype` member).
+   * @param {string} name
+   * @returns {unknown}
+   */
+  function current(name) {
+    return hasOwn(state, name) ? state[name] : undefined;
+  }
+
   /** @param {MiddlewareContext} c */
   function apply(c) {
     if (hasOwn(state, c.slice) && Object.is(c.next, c.prev)) return;
-    if (pending.length === 0) prevState = state;
+    if (!destroyed && pending.length === 0) prevState = state;
     state = Object.freeze({ ...state, [c.slice]: c.next });
-    /** @type {SliceChange} */
-    const change = { slice: c.slice, action: c.action, prev: c.prev, next: c.next };
-    if (c.meta !== undefined) change.meta = c.meta;
-    pending.push(change);
     const record = slices.get(c.slice);
     if (devtools && logger && typeof logger.debug === 'function') {
       const payload =
@@ -712,26 +794,37 @@ export function createStore(options = {}) {
         // devtools logging is best effort
       }
     }
+    // After destroy() the state still updates for reads, but nothing is retained: no listener,
+    // event or write will ever consume a pending change again.
+    if (destroyed) return;
+    /** @type {SliceChange} */
+    const change = { slice: c.slice, action: c.action, prev: c.prev, next: c.next };
+    if (c.meta !== undefined) change.meta = c.meta;
+    pending.push(change);
     if (
       record &&
       record.persist &&
-      !destroyed &&
       c.action !== STORE_ACTIONS.init &&
       c.action !== STORE_ACTIONS.hydrate &&
       c.action !== STORE_ACTIONS.reset
     ) {
       record.dirty = true;
     }
-    if (!destroyed && batchDepth === 0 && !scheduled) {
+    if (batchDepth === 0 && !scheduled) {
       scheduled = true;
       enqueueMicrotask(onMicrotask);
     }
   }
 
+  /** Microtask entry point: nothing may escape it (an exception here would be uncatchable). */
   function onMicrotask() {
     scheduled = false;
     if (batchDepth > 0) return;
-    flush();
+    try {
+      flush();
+    } catch (e) {
+      report(e);
+    }
   }
 
   /** Notifies listeners / observers / events once for every pending change and schedules writes. */
@@ -754,7 +847,16 @@ export function createStore(options = {}) {
 
     for (const name of touched) {
       const record = slices.get(name);
-      if (record && record.persist && record.dirty) schedulePersist(record);
+      if (record && record.persist && record.dirty) {
+        try {
+          schedulePersist(record);
+        } catch (e) {
+          // an injected timer that throws must not take the notification down with it
+          warn(`could not schedule the write of slice '${name}'`, {
+            error: isSdkError(e) ? e : wrap(e),
+          });
+        }
+      }
     }
 
     for (const entry of Array.from(listeners)) {
@@ -764,13 +866,15 @@ export function createStore(options = {}) {
     for (const sub of Array.from(selected)) {
       if (!selected.has(sub)) continue;
       let value;
+      let same;
       try {
         value = sub.selector(next);
+        same = sub.equality(value, sub.last);
       } catch (e) {
         report(e);
         continue;
       }
-      if (sub.equality(value, sub.last)) continue;
+      if (same) continue;
       const last = sub.last;
       sub.last = value;
       safeCall(() => sub.listener(value, last));
@@ -806,11 +910,15 @@ export function createStore(options = {}) {
    * @param {object | ((s: any) => any)} updater
    * @param {{ action?: string } & Record<string, unknown>} [meta]  `action` defaults to `<slice>/set`.
    * @returns {void}
-   * @throws {ValidationError} on an unknown slice, a bad updater or an updater returning `undefined`
+   * @throws {ValidationError} on an unknown slice, a bad `meta` (checked before the updater runs), a
+   *   bad updater or an updater returning `undefined`
    */
   function set(slice, updater, meta) {
     const record = requireSlice(slice, 'set');
-    const prev = state[record.name];
+    if (meta !== undefined && (meta === null || typeof meta !== 'object')) {
+      throw invalid(`store.set('${record.name}'): meta must be an object`, 'meta');
+    }
+    const prev = current(record.name);
     let next;
     if (typeof updater === 'function') {
       next = updater(prev);
@@ -842,9 +950,6 @@ export function createStore(options = {}) {
       );
     }
     if (Object.is(next, prev)) return;
-    if (meta !== undefined && (meta === null || typeof meta !== 'object')) {
-      throw invalid(`store.set('${record.name}'): meta must be an object`, 'meta');
-    }
     const action =
       meta && typeof meta.action === 'string' && meta.action ? meta.action : `${record.name}/set`;
     commit(record.name, next, action, meta);
@@ -903,7 +1008,7 @@ export function createStore(options = {}) {
    * @returns {{ v: number, d: unknown }}
    */
   function envelopeFor(record, p) {
-    const value = state[record.name];
+    const value = current(record.name);
     let data = value;
     if (p.pick) {
       data = {};
@@ -980,7 +1085,10 @@ export function createStore(options = {}) {
 
   /**
    * Reads the persisted copy of a slice into the state. Version mismatches go through `migrate`
-   * (or drop the data); corrupt data and throwing migrations are logged and dropped.
+   * (or drop the data); corrupt data, data of another shape than the slice and throwing migrations
+   * are logged and dropped. A write still pending for the slice is cancelled only when stored data
+   * actually replaces the slice (it is obsolete then); otherwise it is left to go through, so an
+   * explicit `persist.hydrate()` on an empty storage never loses a local change.
    * @param {SliceRecord} record
    * @returns {boolean} whether the state changed
    */
@@ -988,8 +1096,6 @@ export function createStore(options = {}) {
     const p = record.persist;
     if (!p) return false;
     const storage = storageFor(p.kind);
-    cancelTimer(record);
-    record.dirty = false;
     let stored;
     try {
       stored = storage.get(p.key);
@@ -1025,9 +1131,15 @@ export function createStore(options = {}) {
         return false;
       }
     }
-    const current = state[record.name];
-    const next = mergePersisted(current, data, p.pick);
-    if (Object.is(next, current)) return false;
+    const value = current(record.name);
+    if (!compatible(value, data, p.pick)) {
+      drop(record, storage, p, 'stored data does not match the shape of the slice');
+      return false;
+    }
+    const next = mergePersisted(value, data, p.pick);
+    if (Object.is(next, value)) return false;
+    cancelTimer(record);
+    record.dirty = false;
     commit(record.name, next, STORE_ACTIONS.hydrate, undefined);
     return true;
   }
@@ -1045,18 +1157,30 @@ export function createStore(options = {}) {
     }
   }
 
-  /** @type {StorePersist} */
+  /**
+   * Writes are synchronous; the Promise shape is the documented contract, so errors reject and are
+   * never thrown synchronously out of `flush()` / `hydrate()`.
+   * @type {StorePersist}
+   */
   const persist = {
     flush() {
-      for (const record of slices.values()) {
-        if (record.persist && (record.dirty || record.timer !== null)) writeSlice(record);
+      try {
+        for (const record of slices.values()) {
+          if (record.persist && (record.dirty || record.timer !== null)) writeSlice(record);
+        }
+        return Promise.resolve();
+      } catch (e) {
+        return Promise.reject(e);
       }
-      return Promise.resolve();
     },
     hydrate(slice) {
-      if (slice !== undefined) hydrateSlice(requireSlice(slice, 'persist.hydrate'));
-      else for (const record of slices.values()) hydrateSlice(record);
-      return Promise.resolve();
+      try {
+        if (slice !== undefined) hydrateSlice(requireSlice(slice, 'persist.hydrate'));
+        else for (const record of slices.values()) hydrateSlice(record);
+        return Promise.resolve();
+      } catch (e) {
+        return Promise.reject(e);
+      }
     },
     clear(slice) {
       if (slice !== undefined) clearPersisted(requireSlice(slice, 'persist.clear'));
@@ -1172,8 +1296,10 @@ export function createStore(options = {}) {
   /**
    * TC39 / RxJS observable over the (selected) state: emits the current value on subscribe and then
    * on every change of the selected value (`Object.is`); completes on `destroy()`; a throwing selector
-   * errors the observer. Exposes `Symbol.observable` when the runtime defines it (and `'@@observable'`),
-   * so RxJS `from()`, Vue `from()` and the Angular `async` pipe accept it. Effects: none.
+   * errors the observer. `subscribe` takes an observer object or the positional `(next?, error?,
+   * complete?)` functions; a throwing `next` is reported like a listener fault, never thrown back.
+   * Exposes `Symbol.observable` when the runtime defines it (and `'@@observable'`), so RxJS `from()`,
+   * Vue `from()`, the Angular `async` pipe and Svelte's store contract accept it. Effects: none.
    * @param {Selector} [selector]
    * @returns {Observable}
    */
@@ -1182,8 +1308,8 @@ export function createStore(options = {}) {
       selector === undefined ? (s) => s : /** @type {Selector} */ (requireFn(selector, 'selector'));
     /** @type {Observable & Record<string | symbol, unknown>} */
     const observable = {
-      subscribe(observerOrNext) {
-        const observer = toObserver(observerOrNext);
+      subscribe(observerOrNext, error, complete) {
+        const observer = toObserver(observerOrNext, error, complete);
         if (destroyed) {
           if (typeof observer.complete === 'function') observer.complete();
           return { unsubscribe() {}, closed: true };
@@ -1207,7 +1333,10 @@ export function createStore(options = {}) {
             observers.delete(entry);
           },
         };
-        if (typeof observer.next === 'function') observer.next(value);
+        if (typeof observer.next === 'function') {
+          const first = value;
+          safeCall(() => observer.next(first));
+        }
         return subscription;
       },
     };
@@ -1250,7 +1379,10 @@ export function createStore(options = {}) {
 
   /**
    * Apply a snapshot: each non‑`secret` slice is merged over its initial value; slices not registered
-   * yet are applied when they register. Effects: state (restore) · emit `state:change`.
+   * yet are applied when they register. Values are deep‑copied, so the caller's snapshot is never
+   * aliased by the state; a value whose shape does not match the slice's initial value (an object
+   * slice given a string, an array slice given an object) and unusable slice names are ignored with a
+   * warning. Effects: state (restore) · emit `state:change`.
    * @param {StoreSnapshot | { slices: Record<string, unknown> }} snap
    * @returns {void}
    * @throws {ValidationError} when `snap` is not `{ slices: object }`
@@ -1260,19 +1392,29 @@ export function createStore(options = {}) {
       throw invalid('store.restore: snapshot must be an object with a slices map', 'snapshot');
     }
     for (const [name, value] of Object.entries(snap.slices)) {
-      if (UNSAFE_NAMES.has(name)) continue;
+      if (!isValidName(name)) {
+        warn(`ignored snapshot slice '${name}': unusable slice name`, undefined);
+        continue;
+      }
+      const copy = clone(value);
       const record = slices.get(name);
       if (!record) {
-        pendingRestore.set(name, value);
+        pendingRestore.set(name, copy);
         continue;
       }
       if (record.secret) continue;
-      applyRestore(record, value);
+      applyRestore(record, copy);
     }
   }
 
   /** @param {SliceRecord} record @param {unknown} value */
   function applyRestore(record, value) {
+    if (!compatible(record.initial, value, null)) {
+      warn(`ignored snapshot slice '${record.name}': value does not match the shape of the slice`, {
+        received: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+      });
+      return;
+    }
     const next =
       isPlainObject(record.initial) && isPlainObject(value)
         ? { ...record.initial, ...value }
@@ -1289,7 +1431,9 @@ export function createStore(options = {}) {
    */
   function destroy() {
     if (destroyed) return;
-    persist.flush();
+    persist.flush().catch(() => {
+      // writes never throw (they are logged); nothing can be done at teardown anyway
+    });
     destroyed = true;
     for (const record of slices.values()) cancelTimer(record);
     listeners.clear();

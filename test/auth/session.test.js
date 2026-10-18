@@ -1359,3 +1359,426 @@ describe('onChange and destroy', () => {
     auth.destroy();
   });
 });
+
+// ── adversarial: races, timers, abort, inputs ────────────────────────────────────────────────────
+
+describe('refresh races', () => {
+  /** A refresh handler that waits for `release()` before answering. */
+  function gatedRefresh(body = tokens({ accessToken: 'acc_late', refreshToken: 'ref_late' })) {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    let hits = 0;
+    server.use(
+      msw.post(`${BASE}/v1/auth/refresh`, async () => {
+        hits += 1;
+        await gate;
+        return HttpResponse.json(body);
+      })
+    );
+    return { release: () => release(), hits: () => hits };
+  }
+
+  it('a refresh in flight when clearTokens() runs discards its result', async () => {
+    const gate = gatedRefresh();
+    const { auth, session, storage, types } = make({ config: { auth: { tokenStorage: 'local' } } });
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1', user: USER });
+    const pending = settle(auth.refresh());
+    await vi.waitFor(() => expect(gate.hits()).toBe(1));
+    expect(session().status).toBe('refreshing');
+    auth.clearTokens();
+    gate.release();
+    const r = await pending;
+    expect(r.ok).toBe(false);
+    expect(r.error).toBeInstanceOf(AuthError);
+    expect(r.error.reason).toBe('expired');
+    // the late tokens never land anywhere
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(auth.getAccessToken()).toBeNull();
+    expect(auth.getUser()).toBeNull();
+    expect(storage.get('refreshToken')).toBeUndefined();
+    expect(session()).toMatchObject({ status: 'anonymous', user: null, accessExpiresAt: null });
+    expect(types()).toEqual(['auth:login', 'auth:logout']);
+  });
+
+  it('a refresh in flight when logout() runs cannot resurrect the session', async () => {
+    const gate = gatedRefresh();
+    server.use(msw.post(`${BASE}/v1/auth/logout`, () => new HttpResponse(null, { status: 204 })));
+    const { auth, session, types } = make({ withInterceptor: true });
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1' });
+    const pending = settle(auth.refresh());
+    await vi.waitFor(() => expect(gate.hits()).toBe(1));
+    await auth.logout();
+    expect(auth.isAuthenticated()).toBe(false);
+    gate.release();
+    const r = await pending;
+    expect(r.error).toBeInstanceOf(AuthError);
+    expect(r.error.reason).toBe('expired');
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(auth.getAccessToken()).toBeNull();
+    expect(session().status).toBe('anonymous');
+    expect(types()).toEqual(['auth:login', 'auth:logout']);
+    // a refresh rejected while the session was cleared is not reported as an expiry either
+    const rejected = gatedRefresh();
+    server.use(msw.post(`${BASE}/v1/auth/refresh`, () => problem(401, { title: 'gone' })));
+    auth.setTokens({ accessToken: 'acc_2', refreshToken: 'ref_2' });
+    const p2 = settle(auth.refresh());
+    auth.clearTokens();
+    expect((await p2).error.reason).toBe('expired');
+    expect(types().filter((t) => t === 'auth:expired')).toEqual([]);
+    expect(rejected.hits()).toBe(0);
+  });
+
+  it('destroy() voids an in-flight refresh', async () => {
+    const gate = gatedRefresh();
+    const { auth, seen } = make();
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1' });
+    const pending = settle(auth.refresh());
+    await vi.waitFor(() => expect(gate.hits()).toBe(1));
+    auth.destroy();
+    gate.release();
+    const r = await pending;
+    expect(r.error).toBeInstanceOf(AuthError);
+    expect(auth.getAccessToken()).toBe('acc_1');
+    expect(seen.some((e) => e.type === 'auth:refreshed')).toBe(false);
+  });
+
+  it("a caller's signal detaches that caller only; the shared flight completes for the others", async () => {
+    const gate = gatedRefresh(tokens({ accessToken: 'acc_2', refreshToken: 'ref_2' }));
+    const { auth, session, seen } = make({ withInterceptor: true });
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1' });
+    const ac = new AbortController();
+    const a = settle(auth.refresh({ signal: ac.signal }));
+    const b = settle(auth.refresh());
+    await vi.waitFor(() => expect(gate.hits()).toBe(1));
+    ac.abort();
+    const ra = await a;
+    expect(ra.error).toBeInstanceOf(AbortError);
+    // the flight is still running for `b`
+    expect(session().status).toBe('refreshing');
+    expect(auth.getAccessToken()).toBe('acc_1');
+    gate.release();
+    const rb = await b;
+    expect(rb.ok).toBe(true);
+    expect(rb.value.accessToken).toBe('acc_2');
+    expect(auth.getAccessToken()).toBe('acc_2');
+    expect(session().status).toBe('authenticated');
+    expect(gate.hits()).toBe(1);
+    expect(seen.filter((e) => e.type === 'auth:refreshed')).toHaveLength(1);
+    // an already-aborted signal rejects without touching the network or the session
+    const dead = new AbortController();
+    dead.abort();
+    const rc = await settle(auth.refresh({ signal: dead.signal }));
+    expect(rc.error).toBeInstanceOf(AbortError);
+    expect(gate.hits()).toBe(1);
+    expect(session().status).toBe('authenticated');
+    auth.destroy();
+  });
+
+  it('ensureGuestSession honours a per-caller signal the same way', async () => {
+    let release;
+    let hits = 0;
+    server.use(
+      msw.post(`${BASE}/v1/sessions/guest`, async () => {
+        hits += 1;
+        await new Promise((r) => (release = r));
+        return HttpResponse.json({ guestId: 'g_1', guestToken: 'gt_1' });
+      })
+    );
+    const { auth } = make();
+    const ac = new AbortController();
+    const a = settle(auth.ensureGuestSession({ signal: ac.signal }));
+    const b = settle(auth.ensureGuestSession());
+    await vi.waitFor(() => expect(typeof release).toBe('function'));
+    ac.abort();
+    expect((await a).error).toBeInstanceOf(AbortError);
+    release();
+    expect((await b).value).toEqual({ guestId: 'g_1', guestToken: 'gt_1' });
+    expect(auth.isGuest()).toBe(true);
+    expect(hits).toBe(1);
+  });
+});
+
+describe('timers and expiry bookkeeping', () => {
+  it('clamps the proactive refresh timer for a far-future expiry instead of spinning', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date('2026-10-17T10:00:00Z'));
+    let n = 0;
+    server.use(
+      msw.post(`${BASE}/v1/auth/refresh`, () => {
+        n += 1;
+        return HttpResponse.json(tokens({ accessToken: `acc_${n + 1}`, expiresIn: 3600 }));
+      })
+    );
+    const { auth } = make({ now: () => Date.now() });
+    const DAY = 86400000;
+    const MAX = 2 ** 31 - 1;
+    const lifetime = 40 * DAY; // far beyond what setTimeout can represent
+    auth.setTokens({
+      accessToken: 'acc_1',
+      refreshToken: 'ref_1',
+      expiresAt: Date.now() + lifetime,
+    });
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(MAX);
+    // the clamped timer woke up, saw the moment had not come, and re-armed instead of refreshing
+    expect(n).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(auth.getAccessToken()).toBe('acc_1');
+    const due = lifetime - 30000 - MAX;
+    await vi.advanceTimersByTimeAsync(due - 1);
+    expect(n).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(auth.getAccessToken()).toBe('acc_2'));
+    expect(n).toBe(1);
+    auth.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('setTokens without expiresAt forgets the previous expiry and its scheduled refresh', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { calls, record } = recorder();
+    server.use(
+      msw.post(`${BASE}/v1/auth/refresh`, async ({ request }) => {
+        await record(request);
+        return HttpResponse.json(tokens({ accessToken: 'acc_x' }));
+      })
+    );
+    const { auth, session } = make({ now: () => Date.now() });
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1', expiresAt: Date.now() + 60000 });
+    expect(vi.getTimerCount()).toBe(1);
+    expect(auth.getExpiry()).toEqual(expect.any(String));
+    auth.setTokens({ accessToken: 'acc_2' });
+    expect(auth.getExpiry()).toBeNull();
+    expect(session().accessExpiresAt).toBeNull();
+    expect(auth.willExpireWithin(10 * 60000)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(calls).toHaveLength(0);
+    // the omitted refresh token was kept, so a refresh is still possible
+    await auth.refresh();
+    expect(calls[0].body).toEqual({ refreshToken: 'ref_1' });
+    auth.destroy();
+  });
+
+  it('a refresh response without expiry leaves no stale timer behind', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let n = 0;
+    server.use(
+      msw.post(`${BASE}/v1/auth/refresh`, () => {
+        n += 1;
+        return HttpResponse.json({ accessToken: `acc_${n + 1}`, refreshToken: 'ref_2' });
+      })
+    );
+    const { auth } = make({ now: () => Date.now() });
+    auth.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1', expiresAt: Date.now() + 31000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(auth.getAccessToken()).toBe('acc_2'));
+    expect(auth.getExpiry()).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(n).toBe(1);
+  });
+
+  it('persists the guest under the backend TTL and keeps an already-expired one in memory only', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(new Date('2026-10-17T10:00:00Z'));
+    server.use(
+      msw.post(`${BASE}/v1/sessions/guest`, () =>
+        HttpResponse.json({ guestId: 'g_ttl', guestToken: 'gt_ttl', expiresAt: Date.now() + 1000 })
+      )
+    );
+    const { auth, storage } = make({ now: () => Date.now() });
+    await auth.ensureGuestSession();
+    expect(storage.get('guestId')).toBe('g_ttl');
+    vi.setSystemTime(Date.now() + 1500);
+    expect(storage.get('guestId')).toBeUndefined();
+    expect(storage.get('guestToken')).toBeUndefined();
+    expect(auth.isGuest()).toBe(true);
+
+    server.use(
+      msw.post(`${BASE}/v1/sessions/guest`, () =>
+        HttpResponse.json({ guestId: 'g_old', guestToken: 'gt_old', expiresAt: Date.now() - 1 })
+      )
+    );
+    const second = make({ now: () => Date.now() });
+    await second.auth.ensureGuestSession();
+    expect(second.auth.isGuest()).toBe(true);
+    expect(second.storage.get('guestId')).toBeUndefined();
+  });
+});
+
+describe('login bookkeeping', () => {
+  it('decides remember per login: a remember:false login does not leak into the next one', async () => {
+    server.use(
+      msw.post(`${BASE}/v1/auth/login`, () =>
+        HttpResponse.json(tokens({ refreshToken: 'ref_pw' }))
+      ),
+      msw.post(`${BASE}/v1/auth/register`, () =>
+        HttpResponse.json(tokens({ refreshToken: 'ref_reg' }))
+      )
+    );
+    const { auth, storage } = make({ config: { auth: { tokenStorage: 'local' } } });
+    await auth.loginWithPassword({ identifier: 'ana', password: 'pw', remember: false });
+    expect(storage.get('refreshToken')).toBeUndefined();
+    await auth.register({ email: 'ana@example.com', password: 'longenough1', consents: {} });
+    expect(storage.get('refreshToken')).toBe('ref_reg');
+    await auth.loginWithPassword({ identifier: 'ana', password: 'pw', remember: false });
+    expect(storage.get('refreshToken')).toBeUndefined();
+    auth.setTokens({ accessToken: 'acc_host', refreshToken: 'ref_host' });
+    expect(storage.get('refreshToken')).toBe('ref_host');
+    auth.destroy();
+  });
+
+  it("a fresh login never inherits the previous session's refresh token, user or session id", async () => {
+    let n = 0;
+    server.use(
+      msw.post(`${BASE}/v1/auth/login`, () => {
+        n += 1;
+        return n === 1
+          ? HttpResponse.json(tokens({ sessionId: 'sess_1' }))
+          : HttpResponse.json({ accessToken: 'acc_bare' });
+      }),
+      msw.post(`${BASE}/v1/auth/refresh`, () => HttpResponse.json(tokens()))
+    );
+    const { auth, storage, session } = make({ config: { auth: { tokenStorage: 'local' } } });
+    await auth.loginWithPassword({ identifier: 'ana', password: 'pw' });
+    expect(auth.getSessionId()).toBe('sess_1');
+    expect(auth.getUser()).toEqual(USER);
+    expect(storage.get('refreshToken')).toBe('ref_1');
+    await auth.loginWithPassword({ identifier: 'bob', password: 'pw' });
+    expect(auth.getAccessToken()).toBe('acc_bare');
+    expect(auth.getUser()).toBeNull();
+    expect(auth.getSessionId()).toBeNull();
+    expect(session()).toMatchObject({ status: 'authenticated', user: null });
+    expect(storage.get('refreshToken')).toBeUndefined();
+    const r = await settle(auth.refresh());
+    expect(r.error).toBeInstanceOf(AuthError);
+    expect(r.error.reason).toBe('expired');
+    auth.destroy();
+  });
+
+  it('a refresh keeps what the backend did not rotate', async () => {
+    server.use(
+      msw.post(`${BASE}/v1/auth/login`, () =>
+        HttpResponse.json(tokens({ sessionId: 'sess_1', refreshToken: 'ref_keep' }))
+      ),
+      msw.post(`${BASE}/v1/auth/refresh`, () => HttpResponse.json({ accessToken: 'acc_2' }))
+    );
+    const { auth } = make();
+    await auth.loginWithPassword({ identifier: 'ana', password: 'pw' });
+    const out = await auth.refresh();
+    expect(out).toMatchObject({ accessToken: 'acc_2', refreshToken: 'ref_keep', user: USER });
+    expect(auth.getSessionId()).toBe('sess_1');
+    expect(auth.getUser()).toEqual(USER);
+    auth.destroy();
+  });
+
+  it('completeClaim commits the login and the cleared claim as one change', async () => {
+    server.use(
+      msw.post(`${BASE}/v1/auth/claim`, () =>
+        HttpResponse.json({ sentTo: 'x', expiresAt: null, challengeId: 'ch_1' })
+      ),
+      msw.post(`${BASE}/v1/auth/claim/complete`, () => HttpResponse.json(tokens()))
+    );
+    const storage = createStorage({ driver: 'memory' });
+    storage.set('guestId', 'g_1');
+    storage.set('guestToken', 'gt_1');
+    const { auth, store } = make({ storage });
+    const commits = [];
+    store.use((ctx, proceed) => {
+      if (ctx.slice === 'session') commits.push({ action: ctx.action, claim: ctx.next.claim });
+      proceed();
+    });
+    await auth.claimAccount({ channel: 'email' });
+    await auth.completeClaim({ otp: '123456', password: 'longenough1' });
+    const claimed = commits.filter((c) => c.action === 'session/claimed');
+    expect(claimed).toEqual([{ action: 'session/claimed', claim: null }]);
+    auth.destroy();
+  });
+});
+
+describe('logout ordering', () => {
+  it('is local-first and never refreshes the session it just dropped', async () => {
+    const { calls, record } = recorder();
+    let authedDuringCall = null;
+    let refreshes = 0;
+    const { auth, types } = make({ withInterceptor: true });
+    server.use(
+      msw.post(`${BASE}/v1/auth/logout`, async ({ request }) => {
+        await record(request);
+        authedDuringCall = auth.isAuthenticated();
+        return problem(401, { title: 'already gone', code: 'SESSION_EXPIRED' });
+      }),
+      msw.post(`${BASE}/v1/auth/refresh`, () => {
+        refreshes += 1;
+        return HttpResponse.json(tokens());
+      })
+    );
+    auth.setTokens({ accessToken: 'acc', refreshToken: 'ref' });
+    await expect(auth.logout({ everywhere: true }, { headers: { 'X-Trace': 't' } })).resolves.toBe(
+      undefined
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].headers.authorization).toBe('Bearer acc');
+    expect(calls[0].headers['x-trace']).toBe('t');
+    expect(authedDuringCall).toBe(false);
+    expect(refreshes).toBe(0);
+    expect(auth.isAuthenticated()).toBe(false);
+    expect(types()).toEqual(['auth:login', 'auth:logout']);
+  });
+});
+
+describe('hostile inputs', () => {
+  it('never pollutes Object.prototype from backend payloads', async () => {
+    const hostile = JSON.parse(
+      '{"tokens":{"accessToken":"acc_h","__proto__":{"polluted":true}},' +
+        '"__proto__":{"polluted":true},"user":{"id":"u_h","__proto__":{"polluted":true}}}'
+    );
+    server.use(msw.post(`${BASE}/v1/auth/login`, () => HttpResponse.json(hostile)));
+    const { auth } = make();
+    const user = await auth.loginWithPassword({ identifier: 'ana', password: 'pw' });
+    expect(auth.getAccessToken()).toBe('acc_h');
+    expect(user.id).toBe('u_h');
+    expect({}.polluted).toBeUndefined();
+    expect(Object.prototype).not.toHaveProperty('polluted');
+    auth.destroy();
+  });
+
+  it('does not mutate its inputs or the caller opts', async () => {
+    const { calls, record } = recorder();
+    server.use(
+      msw.post(`${BASE}/v1/auth/login`, () => HttpResponse.json(tokens())),
+      msw.get(`${BASE}/v1/auth/providers/google/url`, async ({ request }) => {
+        await record(request);
+        return HttpResponse.json({ url: 'https://idp.example/auth' });
+      }),
+      msw.post(`${BASE}/v1/auth/logout`, () => new HttpResponse(null, { status: 204 }))
+    );
+    const { auth } = make();
+    const login = Object.freeze({ identifier: 'ana', password: 'pw', remember: true });
+    const opts = Object.freeze({
+      headers: Object.freeze({ 'X-Trace': 't' }),
+      query: Object.freeze({ extra: '1' }),
+    });
+    await auth.loginWithPassword(login, opts);
+    await auth.getProviderUrl('google', Object.freeze({ redirectUri: 'https://ota.com/cb' }), opts);
+    const q = new URL(calls[0].url).searchParams;
+    expect(q.get('extra')).toBe('1');
+    expect(q.get('redirectUri')).toBe('https://ota.com/cb');
+    expect(opts).toEqual({ headers: { 'X-Trace': 't' }, query: { extra: '1' } });
+    await auth.logout(Object.freeze({ everywhere: false }), opts);
+    expect(auth.isAuthenticated()).toBe(false);
+    auth.setTokens(Object.freeze({ accessToken: 'a', user: Object.freeze({ id: 'u' }) }));
+    expect(auth.getUser()).toEqual({ id: 'u' });
+  });
+
+  it('is importable without a DOM and touches no browser global at creation', async () => {
+    expect(typeof globalThis.window).toBe('undefined');
+    expect(typeof globalThis.document).toBe('undefined');
+    expect(typeof globalThis.localStorage).toBe('undefined');
+    const { auth } = make({ config: { auth: { tokenStorage: 'local' }, storage: 'local' } });
+    auth.setTokens({ accessToken: 'acc', refreshToken: 'ref', expiresAt: Date.now() + 60000 });
+    expect(auth.isAuthenticated()).toBe(true);
+    auth.destroy();
+  });
+});

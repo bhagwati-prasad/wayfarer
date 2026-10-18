@@ -5,7 +5,8 @@
  * `globalThis.crypto` when present (`randomUUID`, then `getRandomValues`) and falls back to
  * `Math.random` otherwise; `crypto` is looked up at call time, never at import time, so the module is
  * SSR‑safe. Nothing here touches the DOM, storage, timers or the network, keeps module‑level state or
- * logs. Plain `Error`s are never thrown — only `ValidationError`.
+ * logs. Plain `Error`s are never thrown — only `ValidationError` — and nothing from the Web Crypto
+ * API (quota `DOMException`s included) is allowed to escape.
  */
 
 import { ValidationError } from '../errors/index.js';
@@ -15,6 +16,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
 /** Largest multiple of 36 that fits a byte; bytes at or above it are rejected to avoid modulo bias. */
 const ALPHABET_LIMIT = 252;
+/** `crypto.getRandomValues` rejects requests above this many bytes (`QuotaExceededError`). */
+const RANDOM_CHUNK = 65536;
+/** ASCII control characters, which can never travel in an HTTP header value. */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
 
 /** The Web Crypto object when the runtime exposes one. @returns {Crypto|undefined} */
 function webCrypto() {
@@ -23,7 +29,8 @@ function webCrypto() {
 }
 
 /**
- * `n` random bytes from `crypto.getRandomValues`, or from `Math.random` when unavailable.
+ * `n` random bytes from `crypto.getRandomValues` (filled in ≤ 64 KiB slices, the per‑call quota),
+ * or from `Math.random` when unavailable.
  * @param {number} n
  * @returns {Uint8Array}
  */
@@ -31,7 +38,9 @@ function randomBytes(n) {
   const bytes = new Uint8Array(n);
   const c = webCrypto();
   if (c && typeof c.getRandomValues === 'function') {
-    c.getRandomValues(bytes);
+    for (let offset = 0; offset < n; offset += RANDOM_CHUNK) {
+      c.getRandomValues(bytes.subarray(offset, Math.min(n, offset + RANDOM_CHUNK)));
+    }
     return bytes;
   }
   for (let i = 0; i < n; i++) bytes[i] = Math.floor(Math.random() * 256);
@@ -55,7 +64,9 @@ export function uuid() {
 }
 
 /**
- * Random lower‑case alphanumeric (base36) string of `n` characters, uniformly distributed.
+ * Random lower‑case alphanumeric (base36) string of `n` characters, uniformly distributed (biasing
+ * bytes are rejected and redrawn). Any positive length works, including ones above the 64 KiB
+ * `getRandomValues` quota.
  * @param {number} [n=8]
  * @returns {string}
  * @throws {ValidationError} when `n` is not a positive integer
@@ -85,7 +96,7 @@ export function shortId(n = 8) {
 
 /**
  * Correlation id for one HTTP request: `req_<time base36>_<8 random chars>` — unique, header‑safe
- * and roughly sortable by creation time.
+ * (`[a-z0-9_]` only) and roughly sortable by creation time. Reads `Date.now()`.
  * @returns {string}
  */
 export function requestId() {
@@ -95,11 +106,13 @@ export function requestId() {
 /**
  * Deterministic idempotency key: `scope + '-' + hash(stableStringify(payload))`. The same scope and
  * structurally equal payload (whatever the key order) always give the same key, so a retried create
- * call is recognised by the backend.
+ * call is recognised by the backend. A missing payload hashes like `null`. The key is header‑safe
+ * whenever `scope` is: control characters in `scope` are rejected, other characters pass through.
  * @param {string} scope  e.g. `'booking'`, `'payment:intent'`
- * @param {object} [payload]
+ * @param {unknown} [payload]  Anything `stableStringify` accepts (plain data, Dates, …)
  * @returns {string}
- * @throws {ValidationError} when `scope` is not a non‑empty string
+ * @throws {ValidationError} when `scope` is not a non‑empty string without control characters, or
+ *   `payload` contains a cycle
  */
 export function idempotencyKey(scope, payload) {
   if (typeof scope !== 'string' || scope.trim() === '') {
@@ -107,12 +120,17 @@ export function idempotencyKey(scope, payload) {
       issues: [{ path: 'scope', code: 'required', message: 'scope must be a non-empty string' }],
     });
   }
+  if (CONTROL_CHARS_RE.test(scope)) {
+    throw new ValidationError('idempotencyKey() scope must not contain control characters', {
+      issues: [{ path: 'scope', code: 'pattern', message: 'scope contains a control character' }],
+    });
+  }
   return `${scope}-${hash(stableStringify(payload))}`;
 }
 
 /**
  * True when `s` is a canonical RFC 4122 UUID string (8‑4‑4‑4‑12 hex, version 1–8, variant 10xx),
- * in either case.
+ * in either case. The nil and max UUIDs are not canonical versioned UUIDs and are rejected.
  * @param {unknown} s
  * @returns {s is string}
  */

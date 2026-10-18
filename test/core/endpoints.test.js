@@ -95,7 +95,9 @@ const MODULES = [
   'account',
   'alerts',
   'ancillaries',
+  'auth',
   'booking',
+  'client',
   'content',
   'itinerary',
   'offers',
@@ -145,6 +147,30 @@ describe('DEFAULT_ENDPOINTS', () => {
         mod
       ).toBe(true);
     }
+  });
+
+  it('carries the auth.* rows auth/session.js seeds and the client.bootstrap row core/client.js reads', () => {
+    expect(DEFAULT_ENDPOINTS['client.bootstrap']).toEqual({ method: 'GET', path: '/v1/config' });
+    const auth = {
+      'auth.refresh': ['POST', '/v1/auth/refresh'],
+      'auth.ensureGuestSession': ['POST', '/v1/sessions/guest'],
+      'auth.claimAccount': ['POST', '/v1/auth/claim'],
+      'auth.completeClaim': ['POST', '/v1/auth/claim/complete'],
+      'auth.register': ['POST', '/v1/auth/register'],
+      'auth.loginWithPassword': ['POST', '/v1/auth/login'],
+      'auth.requestOtp': ['POST', '/v1/auth/otp/request'],
+      'auth.verifyOtp': ['POST', '/v1/auth/otp/verify'],
+      'auth.getProviderUrl': ['GET', '/v1/auth/providers/{provider}/url'],
+      'auth.loginWithProvider': ['POST', '/v1/auth/providers/{provider}/callback'],
+      'auth.requestMagicLink': ['POST', '/v1/auth/magic-link'],
+      'auth.consumeMagicLink': ['POST', '/v1/auth/magic-link/consume'],
+      'auth.mfa.verify': ['POST', '/v1/auth/mfa/verify'],
+      'auth.logout': ['POST', '/v1/auth/logout'],
+    };
+    for (const [key, [method, path]] of Object.entries(auth)) {
+      expect(DEFAULT_ENDPOINTS[key], key).toEqual({ method, path });
+    }
+    expect(keys.filter((k) => k.startsWith('auth.'))).toHaveLength(Object.keys(auth).length);
   });
 
   it('gives every entry a valid { method, path } with a version prefix and well-formed placeholders', () => {
@@ -278,6 +304,30 @@ describe('get', () => {
     expectConfigError(() => endpoints.get('booking.get', 42));
     expectConfigError(() => endpoints.get('booking.get', ['abc']));
   });
+
+  it('reads own params only, so a placeholder named like an Object.prototype member is missing', () => {
+    const endpoints = createEndpoints({ 'x.y': '/v1/x/{constructor}/{toString}' });
+    const error = expectConfigError(() => endpoints.get('x.y', {}));
+    expect(error.details.missing).toEqual(['constructor', 'toString']);
+    expect(error.details.invalid).toEqual([]);
+    expect(endpoints.get('x.y', { constructor: 'c', toString: 't' })).toBe('/v1/x/c/t');
+  });
+
+  it('fills a repeated placeholder everywhere and reports it once', () => {
+    const endpoints = createEndpoints({ 'x.y': '/v1/x/{id}/y/{id}' });
+    expect(endpoints.get('x.y', { id: 'a/b' })).toBe('/v1/x/a%2Fb/y/a%2Fb');
+    expect(expectConfigError(() => endpoints.get('x.y', {})).details.missing).toEqual(['id']);
+    expect(expectConfigError(() => endpoints.get('x.y', { id: {} })).details.invalid).toEqual([
+      'id',
+    ]);
+  });
+
+  it('does not mutate params and accepts a frozen object', () => {
+    const endpoints = createEndpoints();
+    const params = Object.freeze({ id: 'o1', extra: 1 });
+    expect(endpoints.get('booking.get', params)).toBe('/v1/booking/flight-orders/o1');
+    expect(params).toEqual({ id: 'o1', extra: 1 });
+  });
 });
 
 describe('createEndpoints(overrides)', () => {
@@ -370,6 +420,35 @@ describe('set / has / all', () => {
     expectConfigError(() => endpoints.set('a.b', {}));
     expectConfigError(() => endpoints.set('a.b', { method: 'TRACE', path: '/x' }));
     expect(endpoints.has('a.b')).toBe(false);
+  });
+
+  it('rejects stray braces, empty placeholders and whitespace inside a template', () => {
+    const endpoints = createEndpoints();
+    for (const bad of ['/x/}', '/x/{}', '/x/{a}}', '/x/{{a}', '/x/{a} b', '/x/a\tb', '/x/{a-b}']) {
+      const error = expectConfigError(() => endpoints.set('a.b', bad));
+      expect(error.details, bad).toMatchObject({ key: 'a.b' });
+      expectConfigError(() => createEndpoints({ 'a.b': bad }));
+    }
+    expect(endpoints.has('a.b')).toBe(false);
+  });
+
+  it('trims and upper-cases the method of an object template', () => {
+    const endpoints = createEndpoints({ 'a.b': { method: ' post ', path: '/v1/a' } });
+    expect(endpoints.all()['a.b']).toEqual({ method: 'POST', path: '/v1/a' });
+    endpoints.set('a.b', { method: 'Delete', path: '/v1/a/{id}' });
+    expect(endpoints.all()['a.b'].method).toBe('DELETE');
+  });
+
+  it('does not keep or mutate the template object passed to set', () => {
+    const endpoints = createEndpoints();
+    const template = { method: 'post', path: ' /v1/t/{id} ', extra: true };
+    endpoints.set('t.x', template);
+    expect(template).toEqual({ method: 'post', path: ' /v1/t/{id} ', extra: true });
+    template.path = '/changed';
+    template.method = 'GET';
+    expect(endpoints.all()['t.x']).toEqual({ method: 'POST', path: '/v1/t/{id}' });
+    expect(Object.isFrozen(endpoints.all()['t.x'])).toBe(true);
+    expect(endpoints.get('t.x', { id: 7 })).toBe('/v1/t/7');
   });
 
   it('has reports known and unknown keys without throwing', () => {

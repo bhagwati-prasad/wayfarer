@@ -8,9 +8,12 @@
  * against nested bundles (flat `'a.b'` keys work too) along the fallback chain
  * `en-IN → en → fallback`; the bundled English copy (`messages/en.js`) is always loaded so every
  * SDK string resolves out of the box. A key found in no bundle is recorded (`i18n.missing()` lists
- * them) and renders the `default` option, the custom `missing` handler's string, or the key itself.
- * `setLocale` / `addMessages` / `loadMessages` notify `onChange` listeners (the client turns those
- * into `prefs:change`; this module emits nothing itself). `dir()` is `'rtl'` for Arabic, Hebrew,
+ * the most recent 1000) and renders the `default` option, the custom `missing` handler's string, or
+ * the key itself. Bundle paths and plural / select branches are matched on own properties only, so a
+ * value such as `'constructor'` can never reach a prototype. `setLocale` / `addMessages` /
+ * `loadMessages` notify `onChange` listeners (the client turns those into `prefs:change`; this
+ * module emits nothing itself); `loadMessages` shares one in-flight promise per locale + loader and
+ * releases it as soon as it settles. `dir()` is `'rtl'` for Arabic, Hebrew,
  * Persian, Urdu and other right‑to‑left languages / scripts. Everything is SSR‑safe (`Intl` is read
  * at call time, never `window` / `navigator`), keeps no module‑level mutable state (caches live on the
  * instance), starts no timers, never logs and never throws a plain `Error` — only `ValidationError`
@@ -77,14 +80,17 @@ import { en } from './messages/en.js';
  * @property {(locale?: string) => TextDirection} dir         Text direction of the active (or given) locale.
  * @property {(locale: string, messages: Messages, opts?: { merge?: boolean }) => void} addMessages
  *   Add a bundle: deep‑merged over the existing one (default) or replacing it (`merge: false`).
- * @property {(key: string, locale?: string) => boolean} hasKey   True when `key` resolves to a string along the chain.
+ * @property {(key: string, locale?: string) => boolean} hasKey
+ *   True when `key` resolves to a message along the chain of the active (or the given) locale.
  * @property {(locale: string, loader: (locale: string) => Promise<Messages | { default: Messages }>) => Promise<void>} loadMessages
- *   Load a bundle asynchronously (single‑flight per locale + loader) and add it.
+ *   Load a bundle asynchronously and add it. One in-flight promise is shared per locale + loader
+ *   and released once it settles, so a later call with the same loader refreshes the bundle.
  * @property {(items: unknown[], opts?: FormatListOptions) => string} formatList   `Intl.ListFormat` (`a, b, and c`).
  * @property {(n: number|bigint|string, opts?: Intl.NumberFormatOptions) => string} formatNumber   `Intl.NumberFormat`.
  * @property {(n: number|bigint|string, opts?: Intl.NumberFormatOptions) => string} formatPercent  `0.15 → 15%`.
  * @property {(fn: (change: I18nChange) => void) => () => void} onChange   Subscribe to locale / bundle changes.
- * @property {() => string[]} missing                          Keys requested but found in no bundle (unique, in order).
+ * @property {() => string[]} missing
+ *   Keys requested but found in no bundle (unique, oldest first; the most recent 1000 are kept).
  * @property {() => string[]} locales                          Locales that have a bundle, sorted.
  * @property {() => void} destroy                              Drop listeners, caches, pending loads and the missing list.
  */
@@ -99,11 +105,50 @@ import { en } from './messages/en.js';
  *   | { type: 'select', name: string, options: Record<string, MessageNode[]> }} MessageNode
  */
 
-const RTL_LANGUAGES = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'yi', 'dv', 'ckb', 'syr', 'ug']);
-const RTL_SCRIPTS = new Set(['Arab', 'Hebr', 'Thaa', 'Syrc', 'Nkoo', 'Adlm', 'Rohg']);
+/** Languages whose default script is right-to-left (CLDR likely subtags). */
+const RTL_LANGUAGES = new Set([
+  'ar',
+  'he',
+  'fa',
+  'ur',
+  'ps',
+  'yi',
+  'dv',
+  'ckb',
+  'syr',
+  'ug',
+  'ks',
+  'sd',
+  'lrc',
+  'mzn',
+  'nqo',
+  'bal',
+  'khw',
+  'glk',
+  'arc',
+  'sam',
+]);
+const RTL_SCRIPTS = new Set([
+  'Arab',
+  'Hebr',
+  'Thaa',
+  'Syrc',
+  'Nkoo',
+  'Adlm',
+  'Rohg',
+  'Mand',
+  'Samr',
+  'Yezi',
+  'Sogd',
+  'Ougr',
+  'Elym',
+  'Chrs',
+]);
 const LTR_SCRIPTS = new Set(['Latn', 'Cyrl', 'Deva', 'Grek', 'Hans', 'Hant', 'Jpan', 'Kore']);
 /** Upper bound for every per‑instance memo before it is reset. */
 const CACHE_LIMIT = 500;
+/** Upper bound for the recorded missing keys; the oldest is dropped first. */
+const MISSING_LIMIT = 1000;
 const hasOwn = Object.prototype.hasOwnProperty;
 
 /**
@@ -186,6 +231,16 @@ function resolvePath(node, segs, start) {
     }
   }
   return undefined;
+}
+
+/**
+ * The branch named `key` of a plural / select argument, matched on own properties only so a value
+ * such as `'constructor'` or `'__proto__'` can never select something off the prototype.
+ * @param {Record<string, MessageNode[]>} options @param {string|undefined} key
+ * @returns {MessageNode[]|undefined}
+ */
+function branchOf(options, key) {
+  return key !== undefined && hasOwn.call(options, key) ? options[key] : undefined;
 }
 
 // ── parser ──────────────────────────────────────────────────────────────────────────────────────
@@ -324,8 +379,8 @@ function parseArgument(st, inPlural) {
   st.i += 1;
   const isPlural = kind !== 'select';
   let offset = 0;
-  /** @type {Record<string, MessageNode[]>} */
-  const options = {};
+  /** @type {Record<string, MessageNode[]>} null prototype: branch names are own properties only */
+  const options = Object.create(null);
   for (;;) {
     skipWs();
     if (st.i >= src.length) return fail();
@@ -342,7 +397,7 @@ function parseArgument(st, inPlural) {
         value = readToken(/[\d-]/);
       }
       const n = Number(value);
-      if (!Number.isFinite(n)) return fail();
+      if (value === '' || !Number.isFinite(n)) return fail();
       offset = n;
       continue;
     }
@@ -434,9 +489,9 @@ export function createI18n(options = {}) {
   const listFormats = new Map();
   /** @type {Map<string, Intl.DateTimeFormat>} */
   const dateFormats = new Map();
-  /** @type {Set<(change: I18nChange) => void>} */
+  /** @type {Set<{ fn: (change: I18nChange) => void }>} one entry per subscription (a function may subscribe twice) */
   const listeners = new Set();
-  /** @type {Map<string, { loader: Function, promise: Promise<void> }>} */
+  /** @type {Map<string, Map<Function, Promise<void>>>} locale → loader → in-flight load */
   const pending = new Map();
   /** @type {Set<string>} */
   const missingKeys = new Set();
@@ -549,8 +604,8 @@ export function createI18n(options = {}) {
    * @returns {string}
    */
   function fmtDate(value, loc, kind, style) {
-    const d = value instanceof Date ? value : new Date(/** @type {any} */ (value));
-    if (Number.isNaN(d.getTime())) return String(value);
+    const d = toDate(value);
+    if (!d) return String(value);
     if (typeof Intl === 'undefined' || typeof Intl.DateTimeFormat !== 'function') {
       return d.toISOString();
     }
@@ -645,9 +700,9 @@ export function createI18n(options = {}) {
           const num = Number(n);
           const shifted = num - node.offset;
           const branch =
-            node.options[`=${num}`] ||
-            node.options[pluralCategory(shifted, msgLocale, node.ordinal)] ||
-            node.options.other;
+            branchOf(node.options, `=${num}`) ||
+            branchOf(node.options, pluralCategory(shifted, msgLocale, node.ordinal)) ||
+            branchOf(node.options, 'other');
           if (branch) {
             out += render(branch, vars, msgLocale, fmtLocale, fmtNumber(shifted, fmtLocale));
           }
@@ -656,7 +711,7 @@ export function createI18n(options = {}) {
         case 'select': {
           const value = argValue(vars, node.name);
           const key = value === undefined || value === null ? undefined : String(value);
-          const branch = (key !== undefined && node.options[key]) || node.options.other;
+          const branch = branchOf(node.options, key) || branchOf(node.options, 'other');
           if (branch) out += render(branch, vars, msgLocale, fmtLocale, pound);
           else if (key !== undefined) out += key;
           else out += `{${node.name}}`;
@@ -680,9 +735,10 @@ export function createI18n(options = {}) {
 
   /** @param {I18nChange} change */
   function notify(change) {
-    for (const fn of Array.from(listeners)) {
+    for (const entry of Array.from(listeners)) {
+      if (!listeners.has(entry)) continue; // unsubscribed by an earlier listener in this round
       try {
-        fn(change);
+        entry.fn(change);
       } catch {
         // a listener must never break the caller of setLocale / addMessages
       }
@@ -730,10 +786,15 @@ export function createI18n(options = {}) {
     const o = opts && typeof opts === 'object' ? opts : {};
     /** @type {Record<string, unknown>} */
     let v = vars && typeof vars === 'object' ? /** @type {Record<string, unknown>} */ (vars) : {};
-    if (o.count !== undefined && !hasOwn.call(v, 'count')) v = { ...v, count: o.count };
+    if (o.count !== undefined && v.count === undefined) v = { ...v, count: o.count };
     const hit = find(key, locale);
     if (hit) return format(hit.value, v, hit.locale);
-    missingKeys.add(key);
+    if (!missingKeys.has(key)) {
+      if (missingKeys.size >= MISSING_LIMIT) {
+        missingKeys.delete(/** @type {string} */ (missingKeys.keys().next().value));
+      }
+      missingKeys.add(key);
+    }
     if (typeof o.default === 'string') return format(o.default, v, locale);
     if (customMissing) {
       const custom = customMissing(key, locale, v);
@@ -785,7 +846,11 @@ export function createI18n(options = {}) {
   /** @type {I18n['hasKey']} */
   function hasKey(key, of) {
     assertKey(key);
-    return find(key, of === undefined ? locale : normalizeLocale(String(of))) !== null;
+    if (of === undefined) return find(key, locale) !== null;
+    if (!isNonEmptyString(of)) {
+      throw invalid('locale must be a non-empty string', 'locale', 'type', { expected: 'string' });
+    }
+    return find(key, normalizeLocale(of)) !== null;
   }
 
   /** @type {I18n['loadMessages']} */
@@ -797,8 +862,8 @@ export function createI18n(options = {}) {
       throw invalid('loader must be a function', 'loader', 'type', { expected: 'function' });
     }
     const loc = normalizeLocale(tag);
-    const inFlight = pending.get(loc);
-    if (inFlight && inFlight.loader === loader) return inFlight.promise;
+    const inFlight = pending.get(loc)?.get(loader);
+    if (inFlight) return inFlight;
     /** @type {Promise<unknown>} */
     let started;
     try {
@@ -806,6 +871,8 @@ export function createI18n(options = {}) {
     } catch (e) {
       started = Promise.reject(e);
     }
+    // `started` settles asynchronously, so the entry is stored before the cleanup can run and is
+    // gone (success or failure alike) by the time callers observe the settlement.
     const promise = started
       .then((loaded) => {
         const bundle = extractBundle(loaded, loc);
@@ -817,13 +884,24 @@ export function createI18n(options = {}) {
         addMessages(loc, /** @type {Messages} */ (bundle));
       })
       .catch((e) => {
-        if (pending.get(loc)?.promise === promise) pending.delete(loc);
         throw wrap(e, {
           code: 'I18N_LOAD_FAILED',
           message: `Failed to load messages for '${loc}'`,
         });
+      })
+      .finally(() => {
+        const flights = pending.get(loc);
+        if (flights && flights.get(loader) === promise) {
+          flights.delete(loader);
+          if (flights.size === 0) pending.delete(loc);
+        }
       });
-    pending.set(loc, { loader, promise });
+    let flights = pending.get(loc);
+    if (!flights) {
+      flights = new Map();
+      pending.set(loc, flights);
+    }
+    flights.set(loader, promise);
     return promise;
   }
 
@@ -867,9 +945,10 @@ export function createI18n(options = {}) {
     if (typeof fn !== 'function') {
       throw invalid('listener must be a function', 'fn', 'type', { expected: 'function' });
     }
-    listeners.add(fn);
+    const entry = { fn };
+    listeners.add(entry);
     return () => {
-      listeners.delete(fn);
+      listeners.delete(entry);
     };
   }
 
@@ -918,12 +997,12 @@ export function createI18n(options = {}) {
 /**
  * The messages object inside a loader result: a plain bundle, a `{ default }` module, a module
  * namespace with an export named after the locale (`en-IN`, `en_IN`, `en`), or a namespace with a
- * single object export. `undefined` when nothing fits.
+ * single object export. `undefined` when nothing fits (arrays and primitives included).
  * @param {unknown} loaded @param {string} loc
  * @returns {Messages|undefined}
  */
 function extractBundle(loaded, loc) {
-  if (loaded === null || typeof loaded !== 'object') return undefined;
+  if (loaded === null || typeof loaded !== 'object' || Array.isArray(loaded)) return undefined;
   const obj = /** @type {Record<string, unknown>} */ (loaded);
   if (isPlainObject(obj)) {
     const keys = Object.keys(obj);
@@ -955,4 +1034,20 @@ function toNumeric(v) {
     return Number.isFinite(n) ? n : undefined;
   }
   return undefined;
+}
+
+/**
+ * A valid `Date` from a `Date`, a timestamp or a date string; `undefined` for anything else
+ * (plain objects, symbols, booleans and unparsable strings included), so rendering never throws.
+ * @param {unknown} v
+ * @returns {Date|undefined}
+ */
+function toDate(v) {
+  const d =
+    v instanceof Date
+      ? v
+      : typeof v === 'number' || typeof v === 'string'
+        ? new Date(v)
+        : undefined;
+  return d && !Number.isNaN(d.getTime()) ? d : undefined;
 }

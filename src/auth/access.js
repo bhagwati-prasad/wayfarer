@@ -1,12 +1,17 @@
 /**
- * Access policy resolver + guard (docs/api/01-core.md §1.1, README §1 "Access gating"). Resolves every
- * public function key (`'booking.create'`, `'trips.changes.quote'`, …) against an `AccessPolicy` to
- * `'open' | 'guest' | 'auth'` and wraps module functions so that `'guest'` silently ensures a guest
- * session and `'auth'` rejects with `AuthError{reason:'unauthenticated', key}` (emitting
- * `auth:required`) **before** any network call. The level is resolved at call time, so `setPolicy`
- * takes effect for functions wrapped earlier. Pure and SSR‑safe: no I/O, no DOM, no timers, no
- * module‑level mutable state. It never talks to the backend, never performs the guest login itself
- * (that is `auth.ensureGuestSession`) and never throws a plain `Error`.
+ * Access policy resolver + guard (docs/api/01-core.md §1.1, docs/CONTRIBUTING.md §2, README §1
+ * "Access gating"). Resolves every public function key (`'booking.create'`, `'trips.changes.quote'`,
+ * …) against an `AccessPolicy` to `'open' | 'guest' | 'auth'` — exact key, then the nearest group
+ * wildcard (`module.group.*`), then `module.*`, then `default` — and wraps module functions so that
+ * `'guest'` silently ensures a guest session and `'auth'` rejects with
+ * `AuthError{reason:'unauthenticated', key}` (emitting `auth:required`) **before** any network call.
+ * The level is resolved at call time, so `setPolicy` takes effect for functions wrapped earlier.
+ * `<module>.destroy` is never gated, so `client.destroy()` can always run. `wrap` walks nested plain
+ * objects and function‑valued groups, gives every key its own wrapper, is cycle‑safe and never
+ * writes through `__proto__`. Pure and SSR‑safe: no I/O, no DOM, no timers, no module‑level mutable
+ * state. It never talks to the backend, never performs the guest login itself (that is
+ * `auth.ensureGuestSession`, which is single‑flight) and never throws a plain `Error`
+ * (`ValidationError` for bad arguments, `ConfigError` for a bad policy).
  */
 
 import { AuthError, ConfigError, ValidationError } from '../errors/index.js';
@@ -33,26 +38,46 @@ import { deepFreeze, isPlainObject } from '../utils/object.js';
 
 /**
  * @typedef {Object} AccessOptions
- * @property {AccessPolicy} [policy]  Policy to start from; `undefined` means `DEFAULT_ACCESS_POLICY`.
+ * @property {AccessPolicy|null} [policy]  Policy to start from; `undefined`/`null` means
+ *   `DEFAULT_ACCESS_POLICY`. Throws `ConfigError` when invalid.
  * @property {AccessAuth|null} [auth]  Auth session (read at call time).
  * @property {AccessEvents|null} [events]  Emitter for `auth:required` / `access:change`.
  */
 
 /**
  * @typedef {Object} Access
- * @property {(key: string) => AccessLevel} levelOf  Resolve a function key to its level.
+ * @property {(key: string) => AccessLevel} levelOf  Resolve a concrete function key to its level.
+ *   `<module>.destroy` is always `'open'`. Throws `ValidationError` for a malformed key (a wildcard
+ *   is not a function key).
  * @property {<F extends (...args: any[]) => any>(key: string, fn: F) => F} guard  Wrap one function.
- * @property {<T extends Record<string, any>>(moduleName: string, api: T) => T} wrap  Wrap a module API.
- * @property {(key: string) => boolean} can  Whether calling `key` now would pass the access check.
- * @property {(policy?: AccessPolicy) => void} setPolicy  Replace the policy (emits `access:change`).
- * @property {() => Readonly<AccessPolicy>} policy  The current (frozen) policy.
+ *   `'open'` (and an authenticated or guest caller) calls through synchronously; `'guest'` without a
+ *   session returns `ensureGuestSession().then(fn)`; `'auth'` while anonymous returns a rejected
+ *   promise. Throws `ValidationError` for a bad key or non‑function.
+ * @property {<T extends Record<string, any>>(moduleName: string, api: T) => T} wrap  Wrap a module
+ *   API: the same shape with every function guarded under `moduleName.fnName` (nested plain
+ *   objects → `moduleName.group.fnName`; a function's own enumerable properties are walked too).
+ *   Non‑plain values (arrays, class instances, primitives) are kept by reference; the top‑level
+ *   `destroy` is passed through untouched. Cyclic references resolve to the wrapper already being
+ *   built. Throws `ValidationError` for a bad module name or a non‑plain‑object `api`.
+ * @property {(key: string) => boolean} can  Whether calling `key` now would pass the access check
+ *   (`'open'` / `'guest'` → `true`, `'auth'` → `auth.isAuthenticated()`).
+ * @property {(policy?: AccessPolicy|null) => void} setPolicy  Replace the policy (validated,
+ *   copied, frozen) and emit `access:change` `{ policy, previous }`. Throws `ConfigError` and keeps
+ *   the current policy when the new one is invalid.
+ * @property {() => Readonly<Required<AccessPolicy>>} policy  The current (frozen) policy.
  */
 
 /** @type {ReadonlySet<string>} */
 const LEVELS = new Set(['open', 'guest', 'auth']);
 
-/** Segment syntax of a function key: `module`, `module.fn`, `module.group.fn` (+ optional `.*`). */
-const KEY_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*(\.\*)?$/;
+/** A concrete function key: `module`, `module.fn`, `module.group.fn`, … (no wildcard). */
+const KEY_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
+
+/** A rule key: a function key, or a wildcard `module.*` / `module.group.*`. */
+const RULE_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*(\.\*)?$/;
+
+/** Segments that would collide with `Object.prototype` when used as plain‑object keys. */
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
 
 /** Top‑level module functions that are never gated: `client.destroy()` must always be able to run. */
 const LIFECYCLE = new Set(['destroy']);
@@ -60,7 +85,7 @@ const LIFECYCLE = new Set(['destroy']);
 /**
  * Default policy from docs/api/01-core.md §1.1. Agencies override any key through `config.access`.
  * Everything not listed (pure helpers, reference data, search, content, …) is `'open'`.
- * @type {Readonly<AccessPolicy>}
+ * @type {Readonly<Required<AccessPolicy>>}
  */
 export const DEFAULT_ACCESS_POLICY = deepFreeze({
   default: 'open',
@@ -103,11 +128,27 @@ function isLevel(value) {
 }
 
 /**
+ * @param {string} key
+ * @returns {boolean} whether any dotted segment is a prototype‑pollution vector
+ */
+function hasReservedSegment(key) {
+  return key.split('.').some((segment) => RESERVED.has(segment));
+}
+
+/**
  * @param {unknown} value
- * @returns {value is string}
+ * @returns {value is string} a concrete function key
  */
 function isKey(value) {
   return typeof value === 'string' && KEY_RE.test(value);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is string} a policy rule key (function key or `….*` wildcard), never reserved
+ */
+function isRuleKey(value) {
+  return typeof value === 'string' && RULE_RE.test(value) && !hasReservedSegment(value);
 }
 
 /**
@@ -132,14 +173,44 @@ function hasOwn(o, key) {
 }
 
 /**
+ * Define `key` on `target` as a plain own data property, even for `"__proto__"` (a plain assignment
+ * would change the prototype instead).
+ * @param {object} target
+ * @param {string} key
+ * @param {unknown} value
+ */
+function setOwn(target, key, value) {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  } else {
+    /** @type {Record<string, unknown>} */ (target)[key] = value;
+  }
+}
+
+/**
+ * Whether `key` names a top‑level lifecycle function (`<module>.destroy`) that is never gated.
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isLifecycle(key) {
+  const parts = key.split('.');
+  return parts.length === 2 && LIFECYCLE.has(parts[1]);
+}
+
+/**
  * Validate and freeze a policy. `undefined`/`null` means the default policy; a partial policy gets
- * `default: 'open'` and/or empty `rules`.
+ * `default: 'open'` and/or empty `rules`. The caller's object is copied, never kept or frozen.
  * @param {unknown} policy
  * @returns {Readonly<Required<AccessPolicy>>}
  */
 function normalizePolicy(policy) {
   if (policy === undefined || policy === null) {
-    return /** @type {Readonly<Required<AccessPolicy>>} */ (DEFAULT_ACCESS_POLICY);
+    return DEFAULT_ACCESS_POLICY;
   }
   if (!isPlainObject(policy)) {
     throw new ConfigError('access policy must be an object { default?, rules? }', {
@@ -164,10 +235,11 @@ function normalizePolicy(policy) {
     }
     for (const key of Object.keys(policy.rules)) {
       const level = policy.rules[key];
-      if (!isKey(key)) {
-        throw new ConfigError(`access.rules has an invalid key '${key}'`, {
-          details: { path: `access.rules.${key}` },
-        });
+      if (!isRuleKey(key)) {
+        throw new ConfigError(
+          `access.rules has an invalid key '${key}' (expected 'module.fn' or 'module.*')`,
+          { details: { path: `access.rules.${key}` } }
+        );
       }
       if (!isLevel(level)) {
         throw new ConfigError(`access.rules['${key}'] must be one of ${[...LEVELS].join(' | ')}`, {
@@ -181,12 +253,13 @@ function normalizePolicy(policy) {
 }
 
 /**
- * Exact key → `module.group.*` → `module.*` → default.
+ * Lifecycle → exact key → `module.group.*` → `module.*` → default.
  * @param {Readonly<Required<AccessPolicy>>} policy
  * @param {string} key
  * @returns {AccessLevel}
  */
 function resolveLevel(policy, key) {
+  if (isLifecycle(key)) return 'open';
   const rules = policy.rules;
   if (hasOwn(rules, key)) return rules[key];
   const parts = key.split('.');
@@ -203,11 +276,12 @@ function resolveLevel(policy, key) {
  * Create the access resolver + guard for one client. Effects: none.
  * @param {AccessOptions} [options]
  * @returns {Access}
+ * @throws {ConfigError} when `options.policy` is invalid
  */
 export function createAccess(options = {}) {
-  const o = options || {};
+  const o = options && typeof options === 'object' ? options : {};
   /** @type {AccessAuth|null} */
-  const auth = o.auth || null;
+  const auth = o.auth && typeof o.auth === 'object' ? o.auth : null;
   /** @type {AccessEvents|null} */
   const events = o.events && typeof o.events.emit === 'function' ? o.events : null;
   /** @type {Readonly<Required<AccessPolicy>>} */
@@ -238,9 +312,12 @@ export function createAccess(options = {}) {
     return Boolean(auth && typeof auth.ensureGuestSession === 'function');
   }
 
-  /** @returns {Promise<unknown>} */
+  /**
+   * Call `auth.ensureGuestSession()` and always hand back a promise (a synchronous throw rejects).
+   * @returns {Promise<unknown>}
+   */
   function ensureGuest() {
-    if (!canEnsureGuest()) return Promise.resolve();
+    if (!auth || typeof auth.ensureGuestSession !== 'function') return Promise.resolve();
     try {
       return Promise.resolve(auth.ensureGuestSession());
     } catch (e) {
@@ -299,50 +376,65 @@ export function createAccess(options = {}) {
 
   /**
    * Guard a function and carry over its own enumerable properties (`trips.disruptions` is both a
-   * function and a group holding `respond`).
+   * function and a group holding `respond`). `path` maps the values currently being wrapped to
+   * their wrappers so a cyclic reference resolves instead of recursing forever.
    * @param {string} fullKey
    * @param {Function} fn
+   * @param {Map<object, unknown>} path
    * @returns {Function}
    */
-  function guardWithProps(fullKey, fn) {
+  function guardWithProps(fullKey, fn, path) {
+    const seen = path.get(fn);
+    if (seen !== undefined) return /** @type {Function} */ (seen);
     const guarded = guard(fullKey, fn);
-    for (const prop of Object.keys(fn)) {
-      /** @type {any} */ (guarded)[prop] = wrapValue(
-        `${fullKey}.${prop}`,
-        /** @type {any} */ (fn)[prop]
+    const props = Object.keys(fn);
+    if (props.length === 0) return guarded;
+    path.set(fn, guarded);
+    for (const prop of props) {
+      setOwn(
+        guarded,
+        prop,
+        wrapValue(`${fullKey}.${prop}`, /** @type {Record<string, unknown>} */ (fn)[prop], path)
       );
     }
+    path.delete(fn);
     return guarded;
   }
 
   /**
    * @param {string} fullKey
    * @param {unknown} value
+   * @param {Map<object, unknown>} path
    * @returns {unknown}
    */
-  function wrapValue(fullKey, value) {
-    if (typeof value === 'function') return guardWithProps(fullKey, value);
-    if (isPlainObject(value)) return wrapObject(fullKey, value, false);
+  function wrapValue(fullKey, value, path) {
+    if (typeof value === 'function') return guardWithProps(fullKey, value, path);
+    if (isPlainObject(value)) return wrapObject(fullKey, value, false, path);
     return value;
   }
 
   /**
    * @param {string} prefix
    * @param {Record<string, unknown>} obj
-   * @param {boolean} top
+   * @param {boolean} top  Whether `obj` is the module API itself (its `destroy` is never gated).
+   * @param {Map<object, unknown>} path
    * @returns {Record<string, unknown>}
    */
-  function wrapObject(prefix, obj, top) {
+  function wrapObject(prefix, obj, top, path) {
+    const seen = path.get(obj);
+    if (seen !== undefined) return /** @type {Record<string, unknown>} */ (seen);
     /** @type {Record<string, unknown>} */
     const out = {};
+    path.set(obj, out);
     for (const key of Object.keys(obj)) {
       const value = obj[key];
       if (top && LIFECYCLE.has(key) && typeof value === 'function') {
-        out[key] = value;
+        setOwn(out, key, value);
       } else {
-        out[key] = wrapValue(`${prefix}.${key}`, value);
+        setOwn(out, key, wrapValue(`${prefix}.${key}`, value, path));
       }
     }
+    path.delete(obj);
     return out;
   }
 
@@ -350,7 +442,7 @@ export function createAccess(options = {}) {
   function wrap(moduleName, api) {
     assertKey(moduleName, 'moduleName');
     if (!isPlainObject(api)) throw invalid('api', 'type', 'api must be a plain object');
-    return /** @type {any} */ (wrapObject(moduleName, api, true));
+    return /** @type {any} */ (wrapObject(moduleName, api, true, new Map()));
   }
 
   /** @type {Access['setPolicy']} */

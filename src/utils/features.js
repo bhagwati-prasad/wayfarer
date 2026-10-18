@@ -7,7 +7,9 @@
  * raw. Every effective change is mirrored into the `bootstrap.flags` slice of a duck‑typed store (when
  * one with `set` is given), handed to `onChange` listeners and emitted as `features:change` on the
  * optional events bus, with the keys that changed; a change that leaves the effective flags identical
- * is silent. `load()` has no transport of its own: the client wires `source` to `GET /config`, and
+ * is silent. Delivery is synchronous and FIFO: a change committed from inside a listener is queued
+ * behind the one being delivered, so listeners and the bus always see changes in the order they
+ * happened. `load()` has no transport of its own: the client wires `source` to `GET /config`, and
  * without a source it rejects with `ConfigError`. SSR‑safe: nothing here touches `window`,
  * `document`, storage, timers or the network, and there is no module‑level mutable state or logging.
  * Plain `Error`s are never thrown — only `ConfigError` (factory options) and `ValidationError`
@@ -59,8 +61,9 @@ import { isPlainObject } from './object.js';
  * @typedef {Object} FeaturesOptions
  * @property {Record<string, unknown>} [initial]  Flags known before any load (e.g. `config.features`).
  * @property {() => Promise<Record<string, unknown>>} [source]
- *   Fetches flags: resolves to a flag map, or to a bootstrap document carrying a `flags` object.
- *   The client wires it to `GET /config`.
+ *   Fetches flags: resolves to a flag map, or to a bootstrap document recognised by its own `flags`
+ *   key (a plain object is the map; `null` / `undefined` means the document carries no flags). The
+ *   client wires it to `GET /config`.
  * @property {FeaturesEvents} [events]  Receives `features:change` (and `error` for listener faults).
  * @property {FeaturesStore} [store]    Its `bootstrap.flags` mirrors the effective flags when it has `set`.
  */
@@ -79,8 +82,17 @@ import { isPlainObject } from './object.js';
  * @property {(flag: string, value: unknown) => void} override
  *   Dev override that wins over loaded flags; `null` / `undefined` removes that one override.
  * @property {() => void} clearOverrides  Drop every override.
- * @property {() => Promise<void>} load   Call `source()` and merge what it returns (single‑flight).
- * @property {(fn: (change: FeaturesChange) => void) => () => void} onChange  Subscribe; returns `off`.
+ * @property {() => Promise<void>} load
+ *   Call `source()` and merge what it returns (single‑flight: concurrent calls share one promise;
+ *   a settled load frees the slot). Remote values are sanitised leniently: bad entries and unsafe
+ *   keys are skipped and `null` is ignored rather than removing. Rejects with `ConfigError` when no
+ *   `source` was given, `ValidationError` when it resolves to a non‑object, and whatever `source`
+ *   threw normalised to an `SdkError` (`FEATURES_LOAD_FAILED` when it threw nothing usable); without
+ *   a bus, a listener fault rejects the load after the flags were applied (see `onChange`).
+ * @property {(fn: (change: FeaturesChange) => void) => () => void} onChange
+ *   Subscribe; returns an idempotent `off`. Listeners run synchronously in registration order; one
+ *   that throws does not stop the others — the fault is re‑emitted as `error` `{ error, event }` on
+ *   the bus or, without a bus, rethrown (as an `SdkError`) by the mutating call once fan‑out is done.
  * @property {() => void} destroy  Drop every `onChange` listener (flags are kept readable).
  */
 
@@ -229,10 +241,13 @@ function diffKeys(prev, next) {
 }
 
 /**
- * Pick the flag map out of whatever `source()` resolved to: a bootstrap document (`{ flags }`) or a
- * bare flag map.
+ * Pick the flag map out of whatever `source()` resolved to. A bootstrap document is recognised by an
+ * own `flags` key holding a plain object (the map) or `null` / `undefined` (a document without
+ * flags: its other keys — `version`, `limits`, … — are never read as flags). Anything else is a bare
+ * flag map, so a map may still name a flag `flags` when that value is a boolean or string.
  * @param {unknown} result
  * @returns {Record<string, unknown>}
+ * @throws {ValidationError} when `result` is not an object.
  */
 function flagsFromSource(result) {
   if (!isPlainObject(result)) {
@@ -241,7 +256,10 @@ function flagsFromSource(result) {
     ]);
   }
   const doc = /** @type {Record<string, unknown>} */ (result);
-  return isPlainObject(doc.flags) ? /** @type {Record<string, unknown>} */ (doc.flags) : doc;
+  if (!hasOwn(doc, 'flags')) return doc;
+  const flags = doc.flags;
+  if (flags === null || flags === undefined) return {};
+  return isPlainObject(flags) ? /** @type {Record<string, unknown>} */ (flags) : doc;
 }
 
 // ── factory ─────────────────────────────────────────────────────────────────────────────────────
@@ -256,7 +274,8 @@ function flagsFromSource(result) {
  * @param {FeaturesOptions} [options]
  * @returns {Features}
  * @throws {ConfigError} on a non‑object `initial`, an `initial` value that is not a boolean / string
- *   / number, a non‑function `source`, or an `events` without `emit`.
+ *   / number, a non‑function `source`, or an `events` without `emit`. Whatever `store.set` throws for
+ *   the initial mirror (e.g. an unregistered slice) propagates unchanged.
  */
 export function createFeatures(options = {}) {
   if (options === null || typeof options !== 'object') {
@@ -282,6 +301,11 @@ export function createFeatures(options = {}) {
   const overrides = new Map();
   /** @type {Set<{ fn: (change: FeaturesChange) => void }>} */
   const listeners = new Set();
+  /** Changes committed while another is being delivered; drained FIFO by the outermost commit. */
+  /** @type {FeaturesChange[]} */
+  const pending = [];
+  /** `true` while a commit is delivering (a nested commit then only queues). */
+  let delivering = false;
   /** @type {Promise<void>|null} */
   let inflight = null;
 
@@ -318,19 +342,13 @@ export function createFeatures(options = {}) {
   if (writeStore && loaded.size > 0) mirror('init');
 
   /**
-   * Recompute the effective flags and, when they differ, mirror them, notify listeners and emit.
-   * @param {FeaturesChangeReason} reason
+   * Hand one change to the listeners (a snapshot: one removed meanwhile is skipped, one added waits
+   * for the next change) and then to the bus. A throwing listener never stops the others: its fault
+   * is re‑emitted as `error` when there is a bus, otherwise the first one is returned to be rethrown.
+   * @param {FeaturesChange} change
+   * @returns {SdkError|undefined}
    */
-  function commit(reason) {
-    const previous = current;
-    const next = snapshot();
-    const changed = diffKeys(previous, next);
-    if (changed.length === 0) return;
-    current = next;
-    mirror(reason);
-
-    /** @type {FeaturesChange} */
-    const change = Object.freeze({ flags: next, previous, changed, reason });
+  function deliver(change) {
     /** @type {SdkError|undefined} */
     let firstError;
     for (const entry of Array.from(listeners)) {
@@ -344,6 +362,40 @@ export function createFeatures(options = {}) {
       }
     }
     if (emit) emit('features:change', change);
+    return firstError;
+  }
+
+  /**
+   * Recompute the effective flags and, when they differ, mirror them into the store and deliver the
+   * change. Delivery is FIFO: a change committed from inside a listener (re‑entrant `set` /
+   * `override` / `clearOverrides`) is queued and delivered after the one in flight, so every listener
+   * and the bus see changes in the order they happened and end on the newest flags. Without a bus,
+   * the first listener fault is rethrown once the queue is drained (the flags are already updated).
+   * @param {FeaturesChangeReason} reason
+   */
+  function commit(reason) {
+    const previous = current;
+    const next = snapshot();
+    const changed = diffKeys(previous, next);
+    if (changed.length === 0) return;
+    current = next;
+    mirror(reason);
+    pending.push(Object.freeze({ flags: next, previous, changed, reason }));
+    if (delivering) return;
+
+    delivering = true;
+    /** @type {SdkError|undefined} */
+    let firstError;
+    try {
+      while (pending.length > 0) {
+        const error = deliver(/** @type {FeaturesChange} */ (pending.shift()));
+        if (error && !firstError) firstError = error;
+      }
+    } finally {
+      // A bus whose `emit` throws must not leave the queue stuck for the next commit.
+      delivering = false;
+      pending.length = 0;
+    }
     if (firstError) throw firstError;
   }
 

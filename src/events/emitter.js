@@ -5,15 +5,18 @@
  * name begins with `search:`) or `'*'` (everything), and run synchronously in registration order.
  * The emitter owns the payload envelope of docs/README.md §6: every listener receives
  * `{ type, at, ...data }`, where `type` is the emitted name and `at` comes from the injectable
- * `now()` clock (default `Date.now`). A throwing listener never breaks `emit`: the exception is
- * wrapped into an `SdkError` and re‑emitted as `'error'` `{ error, event }`; an `'error'` listener
- * that throws is logged through the optional `logger` and dropped, so fan‑out can never recurse
- * forever. `waitFor` resolves with the next matching payload and rejects with `TimeoutError`
- * (`timeoutMs`) or `AbortError` (`signal`, or `clear()` with `reason: 'cleared'`), releasing its
- * listener, timer and abort hook as soon as it settles. This module must not touch `window`,
- * `document`, `navigator` or storage, must not keep module‑level mutable state, must not log outside
- * the injected logger, and must never throw a plain `Error` (only `ConfigError` for bad factory
- * options and `ValidationError` for bad arguments).
+ * `now()` clock (default `Date.now`). A failing listener never breaks `emit`: a thrown exception,
+ * or the rejection of a promise the listener returned, is wrapped into an `SdkError` and re‑emitted
+ * as `'error'` `{ error, event }` (synchronously for a throw, when the rejection settles for a
+ * promise); an `'error'` listener that fails is logged through the optional `logger` and dropped, so
+ * fan‑out can never recurse forever and the emitter never leaves an unhandled rejection behind.
+ * `waitFor` resolves with the next matching payload and rejects with `TimeoutError` (`timeoutMs`,
+ * chained timers so delays beyond the 2^31 − 1 ms `setTimeout` limit still wait the full time) or
+ * `AbortError` (`signal`, or `clear()` with `reason: 'cleared'`), releasing its listener, timer and
+ * abort hook as soon as it settles; its listener is owned by the promise, so `off(event)` leaves it
+ * in place. This module must not touch `window`, `document`, `navigator` or storage, must not keep
+ * module‑level mutable state, must not log outside the injected logger, and must never throw a plain
+ * `Error` (only `ConfigError` for bad factory options and `ValidationError` for bad arguments).
  */
 
 import {
@@ -38,7 +41,9 @@ import {
 
 /**
  * Listener signature. The event name is `payload.type`, so wildcard listeners can tell events apart.
- * @typedef {(payload: EventPayload) => void} Listener
+ * A listener may return a promise: `emit` does not wait for it, but a rejection is handled like a
+ * thrown exception (re‑emitted as `'error'`, or logged and dropped for an `'error'` listener).
+ * @typedef {(payload: EventPayload) => void | Promise<void>} Listener
  */
 
 /**
@@ -61,7 +66,8 @@ import {
 /**
  * @typedef {Object} WaitForOptions
  * @property {number} [timeoutMs]  Reject with `TimeoutError{ timeoutMs }` when no matching event
- *   arrives in time. `undefined` / `Infinity` = wait forever.
+ *   arrives in time. `undefined` / `Infinity` = wait forever. Any finite value is honoured, also
+ *   beyond the 2^31 − 1 ms a single `setTimeout` can represent.
  * @property {(payload: EventPayload) => boolean} [filter]  Only a payload for which this returns
  *   truthy settles the wait; a throwing filter rejects the wait with the wrapped exception.
  * @property {AbortSignal} [signal]  Reject with `AbortError` when aborted (immediately when it
@@ -76,14 +82,20 @@ import {
  * @property {(event: string | string[], fn: Listener) => Off} once  Like `on`, but the listener
  *   runs at most once in total and is removed before it runs.
  * @property {(event: string | string[], fn?: Listener) => void} off  Remove `fn` from the given
- *   name(s) / pattern(s), or every listener registered under them when `fn` is omitted.
+ *   name(s) / pattern(s), or every listener registered under them when `fn` is omitted. The
+ *   listener of a pending `waitFor` is never removed this way: it is released when the wait settles,
+ *   through the wait's `signal`, or by `clear()`.
  * @property {(event: string, payload?: unknown) => void} emit  Synchronous fan‑out of
- *   `{ type, at, ...payload }` to exact, namespace and `'*'` listeners in registration order.
+ *   `{ type, at, ...payload }` to exact, namespace and `'*'` listeners in registration order. Never
+ *   throws because of a listener; a returned promise is not awaited, but its rejection is routed to
+ *   `'error'` like a throw.
  * @property {(event: string | string[], options?: WaitForOptions) => Promise<EventPayload>} waitFor
- *   Resolve with the next matching payload.
+ *   Resolve with the next matching payload. Never throws synchronously: bad arguments reject the
+ *   returned promise with `ValidationError`.
  * @property {(event?: string) => number} listenerCount  Without an argument, every listener; for a
  *   plain name, every listener that would receive it (exact + namespace + `'*'`); for a wildcard
- *   pattern, the listeners registered under exactly that pattern.
+ *   pattern, the listeners registered under exactly that pattern. Pending `waitFor`s count as
+ *   listeners.
  * @property {() => void} clear  Drop every listener and reject every pending `waitFor` with
  *   `AbortError{ reason: 'cleared' }`, clearing their timers.
  */
@@ -96,6 +108,8 @@ import {
  * @property {string} pattern     Pattern key the entry lives under.
  * @property {boolean} active     `false` once removed; a snapshot taken mid‑emit skips it.
  * @property {number} seq         Registration order across every pattern.
+ * @property {boolean} internal   `true` for the listener of a pending `waitFor`: owned by the
+ *   promise, so `off(event)` without `fn` leaves it alone (`clear()` still drops it).
  */
 
 /**
@@ -105,6 +119,11 @@ import {
 
 const ALL = '*';
 const NS_SUFFIX = ':*';
+/**
+ * Longest delay `setTimeout` honours (2^31 − 1 ms ≈ 24.8 days): a larger value overflows and fires
+ * on the next tick in Node and in every browser, so longer waits are split into chained timers.
+ */
+const MAX_DELAY = 2147483647;
 
 // ── validation ──────────────────────────────────────────────────────────────────────────────────
 
@@ -248,13 +267,29 @@ function assertWaitForOptions(options) {
 // ── payload envelope ────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Plain object (literal, `Object.create(null)`, parsed JSON), including one from another realm
+ * (iframe, `vm`, jsdom), whose `Object.prototype` is not ours: a plain object's prototype is either
+ * `null` or a root prototype (one whose own prototype is `null`). Class instances, arrays, errors and
+ * other built‑ins have a longer chain and are not plain.
  * @param {unknown} v
  * @returns {v is Record<string, unknown>}
  */
 function isPlainObject(v) {
   if (v === null || typeof v !== 'object') return false;
   const proto = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
+  return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+/**
+ * @param {unknown} v
+ * @returns {v is PromiseLike<unknown>}
+ */
+function isThenable(v) {
+  return (
+    v !== null &&
+    (typeof v === 'object' || typeof v === 'function') &&
+    typeof (/** @type {{ then?: unknown }} */ (v).then) === 'function'
+  );
 }
 
 /**
@@ -360,11 +395,12 @@ export function createEmitter(options = {}) {
    * @param {string} pattern
    * @param {Listener} fn
    * @param {Listener} original
+   * @param {boolean} internal
    * @returns {Entry}
    */
-  function add(pattern, fn, original) {
+  function add(pattern, fn, original, internal) {
     /** @type {Entry} */
-    const entry = { fn, original, pattern, active: true, seq: seq++ };
+    const entry = { fn, original, pattern, active: true, seq: seq++, internal };
     let set = byPattern.get(pattern);
     if (!set) {
       set = new Set();
@@ -406,13 +442,15 @@ export function createEmitter(options = {}) {
   }
 
   /**
-   * Subscribe `original` under `patterns`, optionally once in total.
+   * Subscribe `original` under `patterns`, optionally once in total. `internal` marks the listener
+   * of a pending `waitFor` (see `Entry.internal`).
    * @param {string[]} patterns
    * @param {Listener} original
    * @param {boolean} once
+   * @param {boolean} [internal=false]
    * @returns {Off}
    */
-  function subscribe(patterns, original, once) {
+  function subscribe(patterns, original, once, internal = false) {
     /** @type {Entry[]} */
     const entries = [];
     const off = () => {
@@ -422,11 +460,28 @@ export function createEmitter(options = {}) {
     const fn = once
       ? (payload) => {
           off();
-          original(payload);
+          // Hand the result back so a returned promise's rejection is still routed to 'error'.
+          return original(payload);
         }
       : original;
-    for (const pattern of patterns) entries.push(add(pattern, fn, original));
+    for (const pattern of patterns) entries.push(add(pattern, fn, original, internal));
     return off;
+  }
+
+  /**
+   * Route a listener failure while handling `message` (`e` thrown, or the rejection of a returned
+   * promise): re‑emitted as `'error'` `{ error, event }`, or, when the failing listener was itself
+   * handling `'error'`, logged and dropped so fan‑out can never recurse.
+   * @param {EventPayload} message
+   * @param {unknown} e
+   */
+  function fail(message, e) {
+    const error = wrap(e);
+    if (message.type === 'error') {
+      log("listener for 'error' threw; dropped", { event: message.event, error });
+    } else {
+      emit('error', { error, event: message.type });
+    }
   }
 
   // ── public api ────────────────────────────────────────────────────────────────────────────────
@@ -451,6 +506,8 @@ export function createEmitter(options = {}) {
       const set = byPattern.get(pattern);
       if (!set) continue;
       for (const entry of Array.from(set)) {
+        // A pending waitFor owns its listener: a sweep must not leave its promise hanging.
+        if (entry.internal) continue;
         if (fn === undefined || fn === null || entry.original === fn) remove(entry);
       }
     }
@@ -468,15 +525,11 @@ export function createEmitter(options = {}) {
     for (const entry of entries) {
       if (!entry.active) continue;
       try {
-        entry.fn(message);
+        const result = entry.fn(message);
+        // Not awaited (fan-out stays synchronous), but never left as an unhandled rejection.
+        if (isThenable(result)) result.then(undefined, (e) => fail(message, e));
       } catch (e) {
-        const error = wrap(e);
-        if (type === 'error') {
-          // An 'error' listener threw: re-emitting would recurse, so log and drop.
-          log("listener for 'error' threw; dropped", { event: message.event, error });
-        } else {
-          emit('error', { error, event: type });
-        }
+        fail(message, e);
       }
     }
   }
@@ -516,7 +569,13 @@ export function createEmitter(options = {}) {
         unsubscribe();
         if (timer !== null) clearTimeout(timer);
         timer = null;
-        if (signal) signal.removeEventListener('abort', onAbort);
+        if (signal) {
+          try {
+            signal.removeEventListener('abort', onAbort);
+          } catch {
+            // A misbehaving (duck-typed) signal must not keep the wait from settling.
+          }
+        }
         waiters.delete(waiter);
         settle();
       };
@@ -524,6 +583,16 @@ export function createEmitter(options = {}) {
         finish(() => reject(abortErrorFrom(/** @type {AbortSignal} */ (signal))));
       };
 
+      // Hook the signal before registering anything: if a duck-typed signal throws here, there is
+      // no listener, waiter or timer to leak, and the caller gets the wrapped failure.
+      if (signal) {
+        try {
+          signal.addEventListener('abort', onAbort, { once: true });
+        } catch (e) {
+          reject(wrap(e));
+          return;
+        }
+      }
       unsubscribe = subscribe(
         patterns,
         (payload) => {
@@ -536,20 +605,34 @@ export function createEmitter(options = {}) {
           }
           if (accepted) finish(() => resolve(payload));
         },
-        false
+        false,
+        true
       );
       waiters.add(waiter);
-      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
       if (timeoutMs !== Infinity) {
-        timer = setTimeout(() => {
-          timer = null;
-          const label = patterns.length === 1 ? patterns[0] : patterns.join(', ');
-          finish(() =>
-            reject(
-              new TimeoutError(`waitFor('${label}') timed out after ${timeoutMs} ms`, { timeoutMs })
-            )
-          );
-        }, timeoutMs);
+        // Chain timers of at most MAX_DELAY so a long timeout never overflows setTimeout.
+        let remaining = timeoutMs;
+        const arm = () => {
+          const slice = Math.min(remaining, MAX_DELAY);
+          timer = setTimeout(() => {
+            timer = null;
+            remaining -= slice;
+            if (remaining > 0) {
+              arm();
+              return;
+            }
+            const label = patterns.length === 1 ? patterns[0] : patterns.join(', ');
+            finish(() =>
+              reject(
+                new TimeoutError(`waitFor('${label}') timed out after ${timeoutMs} ms`, {
+                  timeoutMs,
+                })
+              )
+            );
+          }, slice);
+        };
+        arm();
       }
     });
   }

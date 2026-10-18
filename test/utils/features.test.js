@@ -715,3 +715,219 @@ describe('destroy() and hygiene', () => {
     expect(f.variant('a')).toBe('x');
   });
 });
+
+describe('re-entrancy and delivery order', () => {
+  it('delivers a change committed by a listener after the one in flight, to listeners and the bus', () => {
+    const events = emitter();
+    const store = fakeStore();
+    const f = createFeatures({ events, store });
+    const seenByB = [];
+    f.onChange((c) => {
+      if (c.flags.a === '1') f.set({ a: '2' });
+    });
+    f.onChange((c) => seenByB.push({ change: c, stored: store.state.bootstrap.flags.a }));
+    f.set({ a: '1' });
+    // the store is written immediately (it is already '2' while B still receives '1'), but
+    // listener B and the bus must end on the newest flags, never on the stale first change
+    expect(seenByB.map((s) => s.stored)).toEqual(['2', '2']);
+    expect(seenByB.map((s) => s.change.flags.a)).toEqual(['1', '2']);
+    seenByB.splice(0, seenByB.length, ...seenByB.map((s) => s.change));
+    expect(seenByB[1].previous).toBe(seenByB[0].flags);
+    expect(seenByB.map((c) => c.changed)).toEqual([['a'], ['a']]);
+    expect(events.calls.map((c) => c.type)).toEqual(['features:change', 'features:change']);
+    expect(events.calls.map((c) => c.payload.flags.a)).toEqual(['1', '2']);
+    expect(f.get('a')).toBe('2');
+  });
+
+  it('a re-entrant set / override / clearOverrides chain arrives in commit order with store writes first', () => {
+    const store = fakeStore();
+    const f = createFeatures({ initial: { a: 'x' }, store });
+    const seen = [];
+    f.onChange((c) => {
+      seen.push(`${c.reason}:${c.flags.a}:${store.state.bootstrap.flags.a}`);
+      if (c.reason === 'set') f.override('a', 'o');
+      if (c.reason === 'override') f.clearOverrides();
+    });
+    f.set({ a: 'y' });
+    // each nested commit happens while the previous change is being delivered, so every change is
+    // delivered after its own store write and before the next change
+    expect(seen).toEqual(['set:y:y', 'override:o:o', 'clearOverrides:y:y']);
+    expect(store.set.mock.calls.map((c) => c[2].action)).toEqual([
+      'features/init',
+      'features/set',
+      'features/override',
+      'features/clearOverrides',
+    ]);
+  });
+
+  it('a queued re-entrant change is still delivered when an earlier listener throws (no bus)', () => {
+    const f = createFeatures();
+    const seen = [];
+    f.onChange(() => {
+      throw new Error('bug');
+    });
+    f.onChange((c) => {
+      if (c.flags.a === true) f.set({ a: false });
+    });
+    f.onChange((c) => seen.push(c.flags.a));
+    let caught;
+    try {
+      f.set({ a: true });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SdkError);
+    expect(caught.message).toBe('bug');
+    expect(seen).toEqual([true, false]);
+    expect(f.get('a')).toBe(false);
+  });
+
+  it('a bus whose emit throws does not leave the delivery queue stuck for the next commit', () => {
+    let explode = true;
+    const f = createFeatures({
+      events: {
+        emit: () => {
+          if (explode) throw new Error('bus down');
+        },
+      },
+    });
+    const fn = vi.fn();
+    f.onChange(fn);
+    expect(() => f.set({ a: true })).toThrow('bus down');
+    explode = false;
+    f.set({ a: false });
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn.mock.calls[1][0].changed).toEqual(['a']);
+  });
+});
+
+describe('load() result shapes and races', () => {
+  it('a document whose own flags key is null / undefined carries no flags (other keys are not flags)', async () => {
+    for (const flags of [null, undefined]) {
+      const fn = vi.fn();
+      const f = createFeatures({
+        initial: { a: true },
+        source: async () => ({ flags, version: '7', loaded: true, limits: { maxLegs: 6 } }),
+      });
+      f.onChange(fn);
+      await expect(f.load()).resolves.toBeUndefined();
+      expect(f.get('version')).toBeUndefined();
+      expect(f.get('loaded')).toBeUndefined();
+      expect(f.get('a')).toBe(true);
+      expect(fn).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a bare map may still name a flag "flags" when that value is not an object', async () => {
+    const f = createFeatures({ source: async () => ({ flags: true, other: 'x' }) });
+    await f.load();
+    expect(f.get('flags')).toBe(true);
+    expect(f.get('other')).toBe('x');
+  });
+
+  it('merges a late remote result over set() calls made while in flight, under any override', async () => {
+    let resolve;
+    const f = createFeatures({ source: () => new Promise((r) => (resolve = r)) });
+    const fn = vi.fn();
+    f.onChange(fn);
+    const p = f.load();
+    f.set({ local: true, both: 'local' });
+    f.override('both', 'dev');
+    resolve({ remote: true, both: 'remote' });
+    await p;
+    expect(f.get('local')).toBe(true);
+    expect(f.get('remote')).toBe(true);
+    expect(f.get('both')).toBe('dev');
+    // the load changed only what was effectively different: `both` stayed 'dev' underneath the override
+    expect(fn.mock.calls.map((c) => [c[0].reason, c[0].changed])).toEqual([
+      ['set', ['local', 'both']],
+      ['override', ['both']],
+      ['load', ['remote']],
+    ]);
+    f.clearOverrides();
+    expect(f.get('both')).toBe('remote');
+  });
+
+  it('routes a listener fault during load() to the bus, or rejects the load without one', async () => {
+    const events = emitter();
+    const f1 = createFeatures({ events, source: async () => ({ a: true }) });
+    f1.onChange(() => {
+      throw new Error('bug');
+    });
+    await expect(f1.load()).resolves.toBeUndefined();
+    expect(events.calls.map((c) => c.type)).toEqual(['error', 'features:change']);
+
+    const f2 = createFeatures({ source: async () => ({ a: true }) });
+    f2.onChange(() => {
+      throw new Error('bug');
+    });
+    await expect(f2.load()).rejects.toMatchObject({ name: 'SdkError', message: 'bug' });
+    expect(f2.get('a')).toBe(true); // applied before fan-out
+    await expect(f2.load()).resolves.toBeUndefined(); // slot released; nothing changes → no fan-out
+  });
+
+  it('a synchronously throwing or non-promise source is handled like an async one', async () => {
+    const f1 = createFeatures({ source: () => ({ sync: true }) });
+    await expect(f1.load()).resolves.toBeUndefined();
+    expect(f1.get('sync')).toBe(true);
+
+    const f2 = createFeatures({
+      source: () => {
+        throw new ValidationError('bad request', { issues: [] });
+      },
+    });
+    const p = f2.load();
+    expect(p).toBeInstanceOf(Promise);
+    await expect(p).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe('inputs are never mutated', () => {
+  it('leaves initial, set() maps, override values and source results untouched', async () => {
+    const initial = Object.freeze({ a: true, n: 1, nil: null });
+    const flags = { b: 'x', n: 2, a: null };
+    const remote = { c: 3, obj: { z: 1 }, nil: null, flags: undefined };
+    const f = createFeatures({ initial, source: async () => remote });
+    f.set(flags);
+    await f.load();
+    expect(initial).toEqual({ a: true, n: 1, nil: null });
+    expect(flags).toEqual({ b: 'x', n: 2, a: null });
+    expect(remote).toEqual({ c: 3, obj: { z: 1 }, nil: null, flags: undefined });
+    expect(Object.keys(remote)).toEqual(['c', 'obj', 'nil', 'flags']);
+    expect(f.get('a')).toBeUndefined();
+    expect(f.get('n')).toBe('2');
+    expect(f.get('b')).toBe('x');
+    expect(f.get('c')).toBeUndefined(); // own `flags` key (even undefined) marks a document
+  });
+
+  it('snapshots in the store and in change payloads are frozen and independent', () => {
+    const store = fakeStore();
+    const f = createFeatures({ initial: { a: true }, store });
+    const seen = [];
+    f.onChange((c) => seen.push(c));
+    const before = store.state.bootstrap.flags;
+    f.set({ b: 'x' });
+    expect(before).toEqual({ a: true });
+    expect(Object.isFrozen(before)).toBe(true);
+    expect(store.state.bootstrap.flags).not.toBe(before);
+    expect(store.state.bootstrap.flags).toBe(seen[0].flags);
+    expect(seen[0].previous).toBe(before);
+    expect(() => {
+      seen[0].changed.push('zzz');
+    }).not.toThrow(); // arrays are not frozen by design; mutating one must not leak into the facade
+    f.set({ c: true });
+    expect(seen[1].changed).toEqual(['c']);
+  });
+});
+
+describe('number-coerced flags', () => {
+  it('follow the string parsing rules after coercion', () => {
+    const f = createFeatures({ initial: { zero: 0, one: 1, neg: -1, frac: 0.5, negZero: -0 } });
+    expect(f.isEnabled('zero')).toBe(false);
+    expect(f.isEnabled('one')).toBe(true);
+    expect(f.isEnabled('neg')).toBe(true);
+    expect(f.variant('frac')).toBe('0.5');
+    expect(f.get('negZero')).toBe('0');
+    expect(f.isEnabled('negZero')).toBe(false);
+  });
+});

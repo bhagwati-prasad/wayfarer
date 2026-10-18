@@ -88,6 +88,13 @@ describe('module surface', () => {
     );
     for (const value of Object.values(datetime)) expect(typeof value).toBe('function');
   });
+
+  it('imports and runs without a DOM (SSR-safe)', () => {
+    // The module was imported in a plain node environment: nothing above touched window / document.
+    expect(typeof window).toBe('undefined');
+    expect(typeof document).toBe('undefined');
+    expect(typeof formatTime(DEL, { locale: 'en-GB' })).toBe('string');
+  });
 });
 
 describe('options handling', () => {
@@ -103,6 +110,34 @@ describe('options handling', () => {
     const stop = countdown(0, () => {}, null);
     expect(typeof stop).toBe('function');
     stop();
+  });
+
+  it('never mutates its inputs (frozen options, rules and parsed values are fine)', () => {
+    const frozen = Object.freeze({ locale: 'en-GB', tz: 'local', hour12: false, style: 'short' });
+    expect(() => formatTime(DEL, frozen)).not.toThrow();
+    expect(() => formatDate(DEL, frozen)).not.toThrow();
+    expect(() => formatDateTime(DEL, frozen)).not.toThrow();
+    expect(() => formatDateRange(DEL, DXB, frozen)).not.toThrow();
+    expect(() => formatDuration(155, Object.freeze({ style: 'long', locale: 'en' }))).not.toThrow();
+    expect(() => relativeTime(DEL, Object.freeze({ locale: 'en', now: 0 }))).not.toThrow();
+    expect(() => monthMatrix(2026, 11, Object.freeze({ firstDay: 0 }))).not.toThrow();
+    expect(() => timeBucket(DEL, Object.freeze({ night: true }))).not.toThrow();
+    expect(() => paxTypeForAge(5, Object.freeze({ infantMax: 2, childMax: 12 }))).not.toThrow();
+    const stop = countdown(0, () => {}, Object.freeze({ intervalMs: 50 }));
+    stop();
+    const p = Object.freeze(parseLocal(DEL));
+    const wallBefore = p.wall.getTime();
+    formatTime(p, { tz: 'local' });
+    formatDate(p, { style: 'long' });
+    durationBetween(p, DXB);
+    dayDiff(p, DXB);
+    isPast(p, 0);
+    expect(p.wall.getTime()).toBe(wallBefore);
+    expect(p.iso).toBe(DEL);
+    // formatting one style must not bleed into another (the style table is shared)
+    expect(n(formatDate(DEL, { locale: 'en-GB', style: 'short' }))).toBe('2 Nov');
+    expect(n(formatDateTime(DEL, { locale: 'en-GB' }))).toBe('2 Nov 2026, 06:45');
+    expect(n(formatDate(DEL, { locale: 'en-GB', style: 'short' }))).toBe('2 Nov');
   });
 
   it('reports a bad locale as such even when a zone is also given', () => {
@@ -218,6 +253,36 @@ describe('parseLocal', () => {
     expect(err.message).toContain('nope');
   });
 
+  it('rejects a parsed look-alike with a malformed offset instead of leaking a RangeError', () => {
+    const badOffset = { wall: new Date(0), offsetMinutes: 'abc', localTimeOnly: false, iso: 'x' };
+    const badFlag = { wall: new Date(0), offsetMinutes: 330, localTimeOnly: 'no', iso: 'x' };
+    expectInvalid(() => parseLocal(badOffset), 'dt', 'required');
+    expectInvalid(() => formatTime(badOffset, { tz: 'local' }), 'dt', 'required');
+    expectInvalid(() => formatDateTime(badOffset, { tz: 'Asia/Kolkata' }), 'dt', 'required');
+    expectInvalid(() => isPast(badOffset), 'dt', 'required');
+    expectInvalid(() => relativeTime(badOffset), 'dt', 'required');
+    expectInvalid(() => parseLocal(badFlag), 'dt', 'required');
+    const broken = { ...parseLocal(DEL), wall: new Date(NaN) };
+    expectInvalid(() => formatTime(broken), 'dt', 'invalid_datetime');
+  });
+
+  it('keeps years below 100 out of the 1900s everywhere', () => {
+    expect(parseLocal('0000-02-29').iso).toBe('0000-02-29T00:00:00'); // year 0 is a leap year
+    expect(parseLocal('0004-02-29').wall.getUTCFullYear()).toBe(4);
+    expectInvalid(() => parseLocal('0100-02-29'), 'dt', 'invalid_datetime'); // 100 is not
+    expect(addDays('0099-01-05', 1)).toBe('0099-01-06');
+    expect(addDays('0000-02-28', 1)).toBe('0000-02-29');
+    expect(addDays('0099-12-31', 1)).toBe('0100-01-01');
+    expect(dayDiff('0099-12-31', '0100-01-01')).toBe(1);
+    expect(diffDays('0001-01-01', '0001-12-31')).toBe(364);
+    expect(toDateKey(fromDateKey('0004-02-29'))).toBe('0004-02-29');
+    expect(monthMatrix(0, 2).flat().filter(Boolean)).toHaveLength(29);
+    expect(monthMatrix(4, 2).flat().filter(Boolean)).toHaveLength(29);
+    expect(monthMatrix(5, 2).flat().filter(Boolean)).toHaveLength(28);
+    expect(monthMatrix(99, 12).flat().filter(Boolean)[30]).toBe('0099-12-31');
+    expect(ageAt('0099-06-01', '0101-05-31')).toBe(1);
+  });
+
   it('accepts a leap day and rejects 29 Feb in a common year', () => {
     expect(parseLocal('2024-02-29').iso).toBe('2024-02-29T00:00:00');
     expectInvalid(() => parseLocal('2026-02-29'), 'dt', 'invalid_datetime');
@@ -273,6 +338,13 @@ describe('formatTime', () => {
     expect(n(formatTime(d, { locale: 'en-GB' }))).toBe('18:05');
   });
 
+  it('rejects a non-boolean hour12 (null means locale default)', () => {
+    expectInvalid(() => formatTime(DEL, { hour12: 'yes' }), 'hour12', 'invalid_option');
+    expectInvalid(() => formatTime(DEL, { hour12: 1 }), 'hour12', 'invalid_option');
+    expectInvalid(() => formatDateTime(DEL, { hour12: 'no' }), 'hour12', 'invalid_option');
+    expect(n(formatTime(DEL, { locale: 'en-GB', hour12: null }))).toBe('06:45');
+  });
+
   it('rejects an unknown zone, an unsupported locale and bad input', () => {
     expectInvalid(() => formatTime(DEL, { tz: 'Mars/Olympus' }), 'tz', 'invalid_timezone');
     expectInvalid(() => formatTime(DEL, { tz: '' }), 'tz', 'invalid_timezone');
@@ -312,6 +384,16 @@ describe('formatDate', () => {
   it('rejects an unknown style', () => {
     expectInvalid(() => formatDate(DEL, { style: 'full' }), 'style', 'invalid_style');
     expectInvalid(() => formatDate(DEL, { style: 7 }), 'style', 'invalid_style');
+    expectInvalid(() => formatDate(DEL, { style: null }), 'style', 'invalid_style');
+  });
+
+  it('does not resolve style names through the prototype chain', () => {
+    for (const style of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+      expectInvalid(() => formatDate(DEL, { style }), 'style', 'invalid_style');
+      expectInvalid(() => formatDateTime(DEL, { style }), 'style', 'invalid_style');
+      expectInvalid(() => formatDateRange(DEL, DXB, { style }), 'style', 'invalid_style');
+      expectInvalid(() => formatDateRange(DEL, DEL, { style }), 'style', 'invalid_style');
+    }
   });
 });
 
@@ -427,6 +509,31 @@ describe('formatDuration', () => {
     }
   });
 
+  it('really localises and rejects an unsupported locale instead of silently falling back', () => {
+    expect(n(formatDuration(155, { style: 'long', locale: 'de' }))).toMatch(/Std\./);
+    expect(n(formatDuration(155, { style: 'long', locale: ['de', 'en'] }))).toMatch(/Std\./);
+    expectInvalid(
+      () => formatDuration(155, { locale: 'not a locale!' }),
+      'locale',
+      'invalid_locale'
+    );
+    expectInvalid(() => formatDuration(155, { locale: 'en_US' }), 'locale', 'invalid_locale');
+    // even when the engine has no unit style at all, a bad locale is still reported as such
+    const spy = vi.spyOn(Intl, 'NumberFormat').mockImplementation(() => {
+      throw new RangeError('unit style unsupported');
+    });
+    try {
+      expectInvalid(
+        () => formatDuration(155, { locale: 'not a locale!' }),
+        'locale',
+        'invalid_locale'
+      );
+      expect(formatDuration(155, { locale: 'en' })).toBe('2h 35m');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('rejects non-numbers and unknown styles', () => {
     expectInvalid(() => formatDuration('155'), 'minutes', 'invalid_duration');
     expectInvalid(() => formatDuration(NaN), 'minutes', 'invalid_duration');
@@ -464,8 +571,21 @@ describe('durationBetween', () => {
     expect(durationBetween(a, b)).toBe(165);
   });
 
+  it('rounds half minutes symmetrically so reversing the arguments flips the sign', () => {
+    const a = '2026-11-02T06:45:00Z';
+    const b = '2026-11-02T06:47:30Z';
+    expect(durationBetween(a, b)).toBe(3);
+    expect(durationBetween(b, a)).toBe(-3);
+    expect(durationBetween('2021-07-04T09:30:00', '2021-07-04T09:30:30')).toBe(1);
+    expect(durationBetween('2021-07-04T09:30:30', '2021-07-04T09:30:00')).toBe(-1);
+    expect(Object.is(durationBetween('2021-07-04T09:30:10', '2021-07-04T09:30:00'), -0)).toBe(
+      false
+    );
+  });
+
   it('names the offending argument', () => {
     expectInvalid(() => durationBetween('x', DXB), 'a', 'invalid_datetime');
+    expectInvalid(() => durationBetween('x', 'y'), 'a', 'invalid_datetime');
     expectInvalid(() => durationBetween(DEL, 'x'), 'b', 'invalid_datetime');
   });
 });
@@ -490,6 +610,13 @@ describe('dayDiff / isOvernight / diffDays', () => {
     expect(isOvernight('2021-07-04T23:30:00', '2021-07-05T01:05:00')).toBe(true);
     expect(isOvernight('2021-07-04T09:30:00', '2021-07-04T23:59:00')).toBe(false);
     expect(dayDiff('2026-12-31', '2027-01-01')).toBe(1);
+  });
+
+  it('names the offending argument, a before b', () => {
+    expectInvalid(() => dayDiff('x', 'y'), 'a', 'invalid_datetime');
+    expectInvalid(() => dayDiff(DEL, 'y'), 'b', 'invalid_datetime');
+    expectInvalid(() => isOvernight('x', 'y'), 'a', 'invalid_datetime');
+    expectInvalid(() => diffDays('x', 'y'), 'a', 'invalid_datetime');
   });
 
   it('diffDays counts calendar days between DateStr values', () => {
@@ -659,7 +786,8 @@ describe('clampDate', () => {
       'min',
       'invalid_range'
     );
-    expectInvalid(() => clampDate('x', '2026-11-05', '2026-11-09'), 'date', 'invalid_datetime');
+    expectInvalid(() => clampDate('x', '2026-11-05', '2026-11-09'), 'd', 'invalid_datetime');
+    expectInvalid(() => clampDate(undefined, '2026-11-05', '2026-11-09'), 'd', 'required');
     expectInvalid(() => clampDate('2026-11-02', 'x', '2026-11-09'), 'min', 'invalid_datetime');
     expectInvalid(() => clampDate('2026-11-02', '2026-11-05', 'x'), 'max', 'invalid_datetime');
   });
@@ -747,6 +875,15 @@ describe('relativeTime', () => {
     expect(n(relativeTime(at(ms), { locale: 'en', now }))).toBe(text);
   });
 
+  it('rounds half units symmetrically', () => {
+    expect(n(relativeTime(at(150_000), { locale: 'en', now }))).toBe('in 3 minutes');
+    expect(n(relativeTime(at(-150_000), { locale: 'en', now }))).toBe('3 minutes ago');
+    expect(n(relativeTime(at(5.5 * 3_600_000), { locale: 'en', now }))).toBe('in 6 hours');
+    expect(n(relativeTime(at(-5.5 * 3_600_000), { locale: 'en', now }))).toBe('6 hours ago');
+    expect(n(relativeTime(at(4.5 * 86_400_000), { locale: 'en', now }))).toBe('in 5 days');
+    expect(n(relativeTime(at(-4.5 * 86_400_000), { locale: 'en', now }))).toBe('5 days ago');
+  });
+
   it('supports numeric: always and short / narrow styles', () => {
     expect(n(relativeTime(at(86_400_000), { locale: 'en', now, numeric: 'always' }))).toBe(
       'in 1 day'
@@ -764,7 +901,8 @@ describe('relativeTime', () => {
     vi.setSystemTime(now);
     expect(n(relativeTime(at(3 * 86_400_000), { locale: 'en' }))).toBe('in 3 days');
     expect(n(relativeTime('2026-11-02T06:45:00Z', { locale: 'en' }))).toBe('now');
-    expect(n(relativeTime(DEL, { locale: 'en' }))).toBe('5 hours ago'); // 06:45+05:30 is 01:15Z
+    // 06:45+05:30 is 01:15Z, i.e. 5.5 h ago, which rounds away from zero like "in 6 hours" does.
+    expect(n(relativeTime(DEL, { locale: 'en' }))).toBe('6 hours ago');
     const local = new Date(2021, 6, 4, 9, 30);
     vi.setSystemTime(local.getTime() + 2 * 3_600_000);
     expect(n(relativeTime(AMADEUS, { locale: 'en' }))).toBe('2 hours ago');
@@ -912,6 +1050,77 @@ describe('countdown', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('rejects a half-specified timers object and a non-function clock before starting anything', () => {
+    vi.useFakeTimers();
+    const setInterval = vi.fn(() => 1);
+    const onTick = vi.fn();
+    expectInvalid(
+      () => countdown(T0 + 1000, onTick, { timers: { setInterval } }),
+      'timers',
+      'invalid_option'
+    );
+    expectInvalid(
+      () => countdown(T0 + 1000, onTick, { timers: { clearInterval() {} } }),
+      'timers',
+      'invalid_option'
+    );
+    expectInvalid(() => countdown(T0 + 1000, onTick, { timers: {} }), 'timers', 'invalid_option');
+    expectInvalid(() => countdown(T0 + 1000, onTick, { timers: 'global' }), 'timers');
+    expectInvalid(() => countdown(T0 + 1000, onTick, { now: 12345 }), 'now', 'invalid_option');
+    expectInvalid(() => countdown(T0 + 1000, onTick, { now: Date.now() }), 'now', 'invalid_option');
+    expect(onTick).not.toHaveBeenCalled();
+    expect(setInterval).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    // explicit undefined / null fall back to the globals and Date.now
+    vi.setSystemTime(T0);
+    const stop = countdown(T0 + 1000, onTick, { timers: null, now: undefined });
+    expect(onTick).toHaveBeenLastCalledWith(1000);
+    expect(vi.getTimerCount()).toBe(1);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops itself and surfaces the error once when onTick throws on a later tick', () => {
+    let scheduled = null;
+    const timers = {
+      setInterval: vi.fn((fn) => {
+        scheduled = fn;
+        return 42;
+      }),
+      clearInterval: vi.fn(),
+    };
+    let clock = 0;
+    const onTick = vi.fn((remaining) => {
+      if (remaining < 10_000) throw new ValidationError('boom');
+    });
+    const stop = countdown(10_000, onTick, { timers, now: () => clock, intervalMs: 1000 });
+    expect(onTick).toHaveBeenCalledTimes(1);
+    clock = 1000;
+    expect(() => scheduled()).toThrow('boom');
+    expect(timers.clearInterval).toHaveBeenCalledTimes(1);
+    expect(timers.clearInterval).toHaveBeenCalledWith(42);
+    // the host timer firing again (or stop()) does nothing further
+    clock = 2000;
+    scheduled();
+    stop();
+    expect(onTick).toHaveBeenCalledTimes(2);
+    expect(timers.clearInterval).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the global interval when onTick throws on a later tick', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    let calls = 0;
+    countdown(T0 + 10_000, () => {
+      if (++calls === 2) throw new ValidationError('boom');
+    });
+    expect(vi.getTimerCount()).toBe(1);
+    expect(() => vi.advanceTimersByTime(1000)).toThrow('boom');
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(20_000);
+    expect(calls).toBe(2);
+  });
+
   it('leaves no timers behind when the first tick throws', () => {
     vi.useFakeTimers();
     vi.setSystemTime(T0);
@@ -978,6 +1187,17 @@ describe('paxTypeForAge', () => {
     expectInvalid(() => paxTypeForAge(-1, rules), 'age', 'invalid_age');
     expectInvalid(() => paxTypeForAge('5', rules), 'age', 'invalid_age');
     expectInvalid(() => paxTypeForAge(NaN, rules), 'age', 'invalid_age');
+  });
+
+  it('rejects inverted or negative bands and tolerates null rules', () => {
+    expectInvalid(() => paxTypeForAge(5, { infantMax: 12, childMax: 2 }), 'rules', 'invalid_rules');
+    expectInvalid(() => paxTypeForAge(5, { infantMax: -1 }), 'rules', 'invalid_rules');
+    expectInvalid(() => paxTypeForAge(5, { childMax: -3 }), 'rules', 'invalid_rules');
+    expectInvalid(() => paxTypeForAge(5, { infantMax: 13 }), 'rules', 'invalid_rules'); // > default 12
+    expect(paxTypeForAge(5, null)).toBe('CHD');
+    expect(paxTypeForAge(5, 'rules')).toBe('CHD');
+    expect(paxTypeForAge(1, { infantMax: 2, childMax: 2 })).toBe('INF');
+    expect(paxTypeForAge(2, { infantMax: 2, childMax: 2 })).toBe('ADT');
   });
 
   it('composes with ageAt for a travel date', () => {

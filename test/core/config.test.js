@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DEFAULTS, defineConfig, validateConfig } from '../../src/core/config.js';
+import { DEFAULT_ACCESS_POLICY } from '../../src/auth/access.js';
 import { ConfigError, SdkError } from '../../src/errors/index.js';
+
+/** Largest delay `setTimeout` honours; `timeoutMs` and friends must not exceed it. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -96,6 +100,11 @@ describe('DEFAULTS', () => {
     for (const key of guest) expect(DEFAULTS.access.rules[key], key).toBe('guest');
     for (const key of auth) expect(DEFAULTS.access.rules[key], key).toBe('auth');
     expect(Object.keys(DEFAULTS.access.rules)).toHaveLength(guest.length + auth.length);
+  });
+
+  it('agrees with the policy auth/access.js ships (the two copies must never drift)', () => {
+    expect(DEFAULTS.access).toEqual(DEFAULT_ACCESS_POLICY);
+    expect(validateConfig({ access: DEFAULT_ACCESS_POLICY })).toEqual({ valid: true, issues: [] });
   });
 
   it('leaves locale, currency and market to the bootstrap config', () => {
@@ -362,6 +371,69 @@ describe('defineConfig', () => {
     expect(typeof globalThis.window).toBe('undefined');
     expect(typeof globalThis.document).toBe('undefined');
   });
+
+  it('accepts a frozen partial and a null-prototype partial', () => {
+    const frozen = Object.freeze({ search: Object.freeze({ mode: 'single' }), retries: 1 });
+    expect(defineConfig(frozen).search).toEqual({ ...DEFAULTS.search, mode: 'single' });
+    const bare = Object.create(null);
+    bare.retries = 3;
+    bare.search = Object.assign(Object.create(null), { maxPollMs: 100 });
+    const cfg = defineConfig(bare);
+    expect(cfg.retries).toBe(3);
+    expect(cfg.search.maxPollMs).toBe(100);
+    expect(cfg.search.mode).toBe('poll');
+  });
+
+  it('leaves host functions and their own properties untouched (hooks, interceptors, sink)', () => {
+    const onError = Object.assign(() => {}, { meta: { calls: 0 } });
+    const request = Object.assign(() => {}, { meta: { calls: 0 } });
+    const sink = Object.assign(() => {}, { lines: [] });
+    const fetchFn = Object.assign(() => {}, { calls: [] });
+    const cfg = defineConfig({
+      hooks: { onError },
+      interceptors: { request: [request] },
+      logger: { sink },
+      fetch: fetchFn,
+    });
+    expect(cfg.hooks.onError).toBe(onError);
+    expect(cfg.interceptors.request[0]).toBe(request);
+    expect(cfg.logger.sink).toBe(sink);
+    for (const fn of [onError, request, sink, fetchFn]) expect(Object.isFrozen(fn)).toBe(false);
+    onError.meta.calls += 1;
+    request.meta.calls += 1;
+    sink.lines.push('x');
+    fetchFn.calls.push('y');
+    expect(onError.meta.calls).toBe(1);
+    expect(sink.lines).toEqual(['x']);
+    // the SDK-owned containers around them are frozen
+    expect(Object.isFrozen(cfg.hooks)).toBe(true);
+    expect(Object.isFrozen(cfg.interceptors.request)).toBe(true);
+  });
+
+  it('deep-clones i18n.messages so the freeze never reaches an object the host still holds', () => {
+    const entry = { one: '1 item', other: '{n} items' };
+    const messages = { en: { items: [entry], nested: { deep: 'x' } } };
+    const cfg = defineConfig({ i18n: { messages } });
+    expect(cfg.i18n.messages).toEqual(messages);
+    expect(cfg.i18n.messages).not.toBe(messages);
+    expect(cfg.i18n.messages.en.items[0]).not.toBe(entry);
+    expectDeepFrozen(cfg.i18n.messages, 'config.i18n.messages');
+    expect(Object.isFrozen(messages)).toBe(false);
+    expect(Object.isFrozen(messages.en)).toBe(false);
+    expect(Object.isFrozen(messages.en.items)).toBe(false);
+    expect(Object.isFrozen(entry)).toBe(false);
+    entry.other = '{n} things';
+    expect(cfg.i18n.messages.en.items[0].other).toBe('{n} items');
+    expect(cfg.i18n.fallback).toBe('en');
+  });
+
+  it('accepts a message sub-tree shared between bundles (a DAG is not a cycle)', () => {
+    const shared = { ok: 'OK', cancel: 'Cancel' };
+    const cfg = defineConfig({
+      i18n: { messages: { en: { common: shared }, de: { common: shared } } },
+    });
+    expect(cfg.i18n.messages.de.common).toEqual(shared);
+  });
 });
 
 // ── defineConfig: error paths ────────────────────────────────────────────────────────────────────
@@ -624,6 +696,219 @@ describe('defineConfig errors', () => {
     const err = failure({ baseURL: 'https://api.ota.com' });
     expect(err.issues[0].params.allowed).toContain('baseUrl');
   });
+
+  it('rejects baseUrl values the URL parser would silently accept or repair', () => {
+    expect(codes(failure({ baseUrl: 'https://api.ota.com/v1?' }))).toEqual(['baseUrl:invalid_url']);
+    expect(codes(failure({ baseUrl: 'https://api.ota.com/v1#' }))).toEqual(['baseUrl:invalid_url']);
+    expect(codes(failure({ baseUrl: 'https://api\n.ota.com' }))).toEqual(['baseUrl:invalid_url']);
+    expect(codes(failure({ baseUrl: 'https://api.ota.com/\tv1' }))).toEqual([
+      'baseUrl:invalid_url',
+    ]);
+    expect(codes(failure({ baseUrl: 'https://api.ota.com/v 1' }))).toEqual(['baseUrl:invalid_url']);
+    expect(codes(failure({ baseUrl: 'https://api.ota.com/\u0000' }))).toEqual([
+      'baseUrl:invalid_url',
+    ]);
+    expect(failure({ baseUrl: 'https://api\n.ota.com' }).issues[0].message).toBe(
+      'baseUrl must not contain whitespace or control characters'
+    );
+    expect(failure({ baseUrl: 'https://api.ota.com/v1?' }).issues[0].message).toBe(
+      'baseUrl must not contain a query string or fragment'
+    );
+    // still accepted: ports, IPv6 literals, credentials, percent-encoding, unicode hosts
+    for (const baseUrl of [
+      'http://localhost:8080/',
+      'http://[::1]:8080',
+      'https://user:pass@api.ota.com',
+      'https://api.ota.com/a%20b/',
+      'https://bücher.example/',
+    ]) {
+      expect(validateConfig({ baseUrl }), baseUrl).toEqual({ valid: true, issues: [] });
+    }
+  });
+
+  it('bounds millisecond values to what setTimeout can honour', () => {
+    expect(codes(failure({ timeoutMs: MAX_TIMER_MS + 1 }))).toEqual(['timeoutMs:max']);
+    expect(failure({ timeoutMs: MAX_TIMER_MS + 1 }).issues[0]).toEqual({
+      path: 'timeoutMs',
+      code: 'max',
+      message: `timeoutMs must be at most ${MAX_TIMER_MS}`,
+      params: { max: MAX_TIMER_MS, received: MAX_TIMER_MS + 1 },
+    });
+    expect(defineConfig({ timeoutMs: MAX_TIMER_MS }).timeoutMs).toBe(MAX_TIMER_MS);
+    expect(codes(failure({ auth: { autoRefreshSkewMs: 2 ** 32 } }))).toEqual([
+      'auth.autoRefreshSkewMs:max',
+    ]);
+    expect(codes(failure({ search: { pollIntervalMs: 2 ** 31 } }))).toEqual([
+      'search.pollIntervalMs:max',
+    ]);
+    expect(codes(failure({ search: { maxPollMs: 2 ** 31 } }))).toEqual(['search.maxPollMs:max']);
+    expect(defineConfig({ search: { maxPollMs: MAX_TIMER_MS } }).search.maxPollMs).toBe(
+      MAX_TIMER_MS
+    );
+    // retries is a count, not a delay: no upper bound
+    expect(defineConfig({ retries: 2 ** 31 }).retries).toBe(2 ** 31);
+  });
+
+  it('validates access rule keys with the grammar createAccess enforces', () => {
+    for (const key of ['', '*', '*.x', 'booking.', '.create', 'a..b', 'booking-create', 'a.*.b']) {
+      expect(
+        codes(failure({ access: { rules: { [key]: 'guest' } } })),
+        JSON.stringify(key)
+      ).toEqual([`access.rules[${key}]:invalid_format`]);
+    }
+    expect(failure({ access: { rules: { '*.x': 'guest' } } }).issues[0]).toEqual({
+      path: 'access.rules[*.x]',
+      code: 'invalid_format',
+      message:
+        "access.rules[*.x] must be a function key such as 'booking.create' or a wildcard such as 'booking.*'",
+      params: { received: '*.x' },
+    });
+    for (const key of ['booking', 'booking.create', 'booking.*', 'trips.changes.*', '$a._b1.c']) {
+      expect(defineConfig({ access: { rules: { [key]: 'auth' } } }).access.rules[key], key).toBe(
+        'auth'
+      );
+    }
+    // a bad key is reported once, without also checking its level
+    expect(codes(failure({ access: { rules: { '*.x': 'member' } } }))).toEqual([
+      'access.rules[*.x]:invalid_format',
+    ]);
+  });
+
+  it('validates endpoint keys and templates with the grammar createEndpoints enforces', () => {
+    for (const key of ['', 'search create', 'search.', '.create', 'search..create', 'search.*']) {
+      expect(codes(failure({ endpoints: { [key]: '/x' } })), JSON.stringify(key)).toEqual([
+        `endpoints[${key}]:invalid_format`,
+      ]);
+    }
+    const bad = {
+      'a.noSlash': 'v1/x',
+      'a.space': '/v1/x y',
+      'a.badName': '/v1/{bad-name}',
+      'a.unclosed': '/v1/{id',
+      'a.stray': '/v1/}',
+      'a.scheme': 'ftp://x/y',
+    };
+    expect(codes(failure({ endpoints: bad }))).toEqual(
+      Object.keys(bad).map((k) => `endpoints[${k}]:invalid_format`)
+    );
+    expect(failure({ endpoints: { 'a.noSlash': 'v1/x' } }).issues[0].message).toBe(
+      "endpoints[a.noSlash] must start with '/' or be an absolute http(s) URL"
+    );
+    expect(failure({ endpoints: { 'a.badName': '/v1/{bad-name}' } }).issues[0].message).toBe(
+      "endpoints[a.badName] has a malformed placeholder (expected '{name}')"
+    );
+    const good = {
+      'search.create': '/v2/shopping/flight-offers',
+      'booking.get': '/v1/booking/flight-orders/{id}',
+      'trips.changes.quote': '/v1/trips/{tripId}/changes/{changeId}/quote',
+      'content.cdn': 'https://cdn.ota.com/v1/content/{slug}',
+      'a.trimmed': ' /v1/x ',
+    };
+    expect(validateConfig({ endpoints: good })).toEqual({ valid: true, issues: [] });
+    expect(defineConfig({ endpoints: good }).endpoints).toEqual(good);
+  });
+
+  it('validates optional adapter members when present', () => {
+    expect(
+      codes(failure({ storage: { getItem() {}, setItem() {}, removeItem() {}, keys: true } }))
+    ).toEqual(['storage.keys:invalid_type']);
+    const withKeys = { getItem() {}, setItem() {}, removeItem() {}, keys: () => [] };
+    expect(defineConfig({ storage: withKeys }).storage).toBe(withKeys);
+    expect(
+      codes(failure({ telemetry: { adapters: [{ name: 't', track() {}, flush: 'now' }] } }))
+    ).toEqual(['telemetry.adapters[0].flush:invalid_type']);
+    expect(
+      validateConfig({
+        telemetry: { adapters: [{ name: 't', track() {}, page() {}, identify() {} }] },
+      })
+    ).toEqual({ valid: true, issues: [] });
+  });
+
+  it('reports a cyclic i18n.messages tree as `cyclic` instead of overflowing the stack', () => {
+    const messages = { en: { common: {} } };
+    messages.en.common.back = messages.en;
+    const err = failure({ i18n: { messages } });
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(err.issues).toEqual([
+      {
+        path: 'i18n.messages.en.common.back',
+        code: 'cyclic',
+        message: 'i18n.messages.en.common.back refers back to one of its ancestors',
+      },
+    ]);
+    const self = {};
+    self.self = self;
+    expect(codes(validateConfig({ i18n: { messages: self } }))).toEqual([
+      'i18n.messages.self:cyclic',
+    ]);
+  });
+});
+
+// ── prototype-pollution keys ─────────────────────────────────────────────────────────────────────
+
+describe('reserved keys (__proto__, constructor, prototype)', () => {
+  afterEach(() => {
+    // Nothing below may have leaked onto Object.prototype.
+    expect(Object.prototype).not.toHaveProperty('polluted');
+    expect({}.polluted).toBeUndefined();
+  });
+
+  it('are reported at the top level instead of being dropped by the merge', () => {
+    const json = JSON.parse('{"__proto__":{"polluted":true},"retries":1}');
+    expect(codes(validateConfig(json))).toEqual(['__proto__:unknown_key']);
+    expect(codes(failure(json))).toEqual(['__proto__:unknown_key']);
+    expect(codes(failure({ constructor: 'x' }))).toEqual(['constructor:unknown_key']);
+    expect(codes(failure({ prototype: {} }))).toEqual(['prototype:unknown_key']);
+  });
+
+  it('are reported inside fixed shapes', () => {
+    expect(codes(failure({ auth: { constructor: 'x' } }))).toEqual([
+      'auth.constructor:unknown_key',
+    ]);
+    expect(codes(failure(JSON.parse('{"search":{"__proto__":{"polluted":true}}}')))).toEqual([
+      'search.__proto__:unknown_key',
+    ]);
+    expect(codes(failure({ hooks: { prototype: () => {} } }))).toEqual([
+      'hooks.prototype:unknown_key',
+    ]);
+  });
+
+  it('are reported as invalid_key inside free-form records and message bundles', () => {
+    expect(failure({ access: { rules: { constructor: 'guest' } } }).issues).toEqual([
+      {
+        path: 'access.rules.constructor',
+        code: 'invalid_key',
+        message: 'access.rules.constructor is a reserved key',
+        params: { received: 'constructor' },
+      },
+    ]);
+    expect(codes(failure(JSON.parse('{"endpoints":{"__proto__":"/x"}}')))).toEqual([
+      'endpoints.__proto__:invalid_key',
+    ]);
+    expect(codes(failure({ features: { prototype: true } }))).toEqual([
+      'features.prototype:invalid_key',
+    ]);
+    expect(codes(failure({ i18n: { messages: { en: { constructor: 'Builder' } } } }))).toEqual([
+      'i18n.messages.en.constructor:invalid_key',
+    ]);
+    expect(
+      codes(failure(JSON.parse('{"i18n":{"messages":{"__proto__":{"polluted":true}}}}')))
+    ).toEqual(['i18n.messages.__proto__:invalid_key']);
+  });
+
+  it('never let defineConfig succeed on input validateConfig rejects', () => {
+    for (const input of [
+      JSON.parse('{"__proto__":{"polluted":true}}'),
+      { constructor: 'x' },
+      { auth: { constructor: 'x' } },
+      { access: { rules: { constructor: 'guest' } } },
+      { i18n: { messages: { en: { prototype: 'x' } } } },
+    ]) {
+      const result = validateConfig(input);
+      expect(result.valid).toBe(false);
+      expect(failure(input).issues).toEqual(result.issues);
+    }
+  });
 });
 
 // ── validateConfig ───────────────────────────────────────────────────────────────────────────────
@@ -714,5 +999,23 @@ describe('validateConfig', () => {
     expect(() => defineConfig(good)).not.toThrow();
     const bad = { retries: -2, logger: { level: 'loud' } };
     expect(failure(bad).issues).toEqual(validateConfig(bad).issues);
+  });
+
+  it('reports issues in the order of the input keys, the same way defineConfig does', () => {
+    const input = { bogus: 1, search: { resultMode: 'both', mode: 'ws' }, baseUrl: 'x' };
+    const order = ['bogus', 'search.resultMode', 'search.mode', 'baseUrl'];
+    expect(validateConfig(input).issues.map((i) => i.path)).toEqual(order);
+    expect(failure(input).issues.map((i) => i.path)).toEqual(order);
+  });
+
+  it('validates a full defined config as the config the client will see', () => {
+    const cfg = defineConfig({
+      baseUrl: 'https://api.ota.com/',
+      endpoints: { 'search.create': '/v2/shopping/flight-offers' },
+      access: { rules: { 'booking.create': 'auth' } },
+      i18n: { messages: { en: { hello: 'Hello' } } },
+    });
+    expect(validateConfig(cfg)).toEqual({ valid: true, issues: [] });
+    expect(validateConfig(DEFAULTS)).toEqual({ valid: true, issues: [] });
   });
 });

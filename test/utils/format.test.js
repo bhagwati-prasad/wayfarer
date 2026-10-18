@@ -221,6 +221,68 @@ describe('module surface', () => {
     maskEmail('rahul@example.com');
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('never mutates its inputs (frozen fixtures stay equal to their snapshots)', () => {
+    const deepFreeze = (o) => {
+      if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+        Object.freeze(o);
+        for (const v of Object.values(o)) deepFreeze(v);
+      }
+      return o;
+    };
+    const inputs = {
+      slices: [slice({ origin: DEL, destination: BOM }), slice({ origin: BOM, destination: DEL })],
+      params: { ...searchParams, slices: searchParams.slices.map((s) => ({ ...s })) },
+      withoutLayovers: (() => {
+        const s = slice();
+        delete s.layovers;
+        return s;
+      })(),
+      segment: seg({ operatingCarrier: UK }),
+      pax: { adults: 2, children: 1, infants: 1 },
+      bags: [{ quantity: 1, weightKg: 23, included: true }, { included: false }],
+      traveler: { ...traveler },
+      phone: { countryCode: '91', number: '9876543210' },
+      card: { brand: 'visa', last4: '4242' },
+      seat: { number: '12A', available: true, characteristics: [] },
+      pair: { row: 12, column: 'A' },
+    };
+    const snapshot = structuredClone(inputs);
+    deepFreeze(inputs);
+    formatRoute(inputs.slices, { style: 'city_code' });
+    formatRoute(inputs.params);
+    formatPlace(inputs.slices[0].origin, 'full');
+    formatStops(inputs.slices[0]);
+    formatLayovers(inputs.slices[0], t);
+    formatLayovers(inputs.withoutLayovers);
+    formatPaxSummary(inputs.pax, i18n);
+    formatFlightNumber(inputs.segment);
+    formatOperatedBy(inputs.segment, t);
+    formatBaggage(inputs.bags, t);
+    formatName(inputs.traveler, { title: true, order: 'family_first' });
+    initials(inputs.traveler);
+    maskPhone(inputs.phone);
+    maskCard(inputs.card);
+    formatSeat(inputs.seat);
+    formatSeat(inputs.pair);
+    expect(inputs).toEqual(snapshot);
+  });
+
+  it('never writes to the console', () => {
+    const spies = ['log', 'info', 'warn', 'error', 'debug'].map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {})
+    );
+    formatRoute(searchParams, { style: 'city' });
+    formatLayovers(slice(), (key) => key);
+    formatCabin('premium_plus', t);
+    formatBaggage([{ quantity: 0, weightKg: 23 }], t);
+    maskCard('4242424242424242', 'constructor');
+    maskPhone('+91 98765 43210');
+    titleCase("CHICAGO O'HARE");
+    truncate('Indira Gandhi International', 14);
+    expect(() => formatSeat({ row: true, column: 'A' })).toThrow(ValidationError);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
 });
 
 // ── formatPlace ──────────────────────────────────────────────────────────────────────────────────
@@ -320,6 +382,14 @@ describe('formatRoute', () => {
     expect(formatRoute(searchParams, null)).toBe('DEL → BOM → DEL');
   });
 
+  it('always puts exactly one space on each side of the arrow', () => {
+    expect(formatRoute(searchParams, { arrow: ' → ' })).toBe('DEL → BOM → DEL');
+    expect(formatRoute(searchParams, { arrow: '  to  ' })).toBe('DEL to BOM to DEL');
+    // an empty arrow leaves a single space, never a double one
+    expect(formatRoute(searchParams, { arrow: '' })).toBe('DEL BOM DEL');
+    expect(formatRoute(searchParams, { arrow: '   ' })).toBe('DEL BOM DEL');
+  });
+
   it('returns an empty string for no slices', () => {
     expect(formatRoute([])).toBe('');
     expect(formatRoute({ ...searchParams, slices: [] })).toBe('');
@@ -401,6 +471,9 @@ describe('formatStops', () => {
     expectInvalid(() => formatStops('1'), 'n', 'invalid_count');
     expectInvalid(() => formatStops(undefined), 'n', 'invalid_count');
     expectInvalid(() => formatStops({}), 'n', 'invalid_count');
+    expectInvalid(() => formatStops({ stops: null }), 'n', 'invalid_count');
+    expectInvalid(() => formatStops({ stops: '1' }), 'n', 'invalid_count');
+    expectInvalid(() => formatStops(NaN), 'n', 'invalid_count');
     expectInvalid(() => formatStops(1, 'en'), 't', 'type');
     expectInvalid(() => formatStops(1, {}), 't', 'type');
   });
@@ -444,8 +517,8 @@ describe('formatLayovers', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toBe('common.layover');
     expect(spy.mock.calls[0][2]).toEqual({ default: '{duration} in {airport}' });
-    // the bundled English copy adds the word "layover"
-    expect(n(formatLayovers(slice(), t))).toBe('2h 10m layover in DXB');
+    // the bundled English copy matches the docs/api/03-utils.md §3 example
+    expect(n(formatLayovers(slice(), t))).toBe('2h 10m in DXB');
   });
 
   it('rejects malformed slices and layovers', () => {
@@ -465,6 +538,42 @@ describe('formatLayovers', () => {
     );
     expectInvalid(() => formatLayovers({ segments: [seg(), null] }), 'slice.segments[1]', 'type');
     expectInvalid(() => formatLayovers(slice(), 42), 't', 'type');
+  });
+
+  it('addresses bad segment times to the segment field when deriving layovers', () => {
+    const second = seg({ origin: DXB, destination: LHR, departureAt: '2026-11-02T11:40:00+04:00' });
+    // missing arrival on the first segment
+    const missingArrival = expectInvalid(
+      () => formatLayovers({ segments: [seg({ arrivalAt: undefined }), second] }),
+      'slice.segments[0].arrivalAt',
+      'invalid_datetime'
+    );
+    expect(missingArrival.message).toMatch(/^formatLayovers: /);
+    // unparsable departure on the second segment
+    const badDeparture = expectInvalid(
+      () => formatLayovers({ segments: [seg(), seg({ ...second, departureAt: 'tomorrow' })] }),
+      'slice.segments[1].departureAt',
+      'invalid_datetime'
+    );
+    expect(badDeparture.issues[0].params).toEqual({ value: 'tomorrow' });
+    // the next flight leaves before the previous one lands
+    const reversed = expectInvalid(
+      () =>
+        formatLayovers({
+          segments: [seg(), seg({ ...second, departureAt: '2026-11-02T07:30:00+04:00' })],
+        }),
+      'slice.segments[1].departureAt',
+      'invalid_duration'
+    );
+    expect(reversed.issues[0].params.value).toBeLessThan(0);
+    // a zero-minute connection is still a (degenerate) layover, not an error
+    expect(
+      n(
+        formatLayovers({
+          segments: [seg(), seg({ ...second, departureAt: '2026-11-02T09:30:00+04:00' })],
+        })
+      )
+    ).toBe('0m in DXB');
   });
 });
 
@@ -555,6 +664,14 @@ describe('formatFlightNumber', () => {
     expectInvalid(() => formatFlightNumber(null), 'seg', 'type');
     expectInvalid(() => formatFlightNumber({ marketingCarrier: AI }), 'seg.flightNumber', 'type');
     expectInvalid(() => formatFlightNumber({ flightNumber: null }), 'seg.flightNumber', 'type');
+  });
+
+  it('rejects blank and non-integer flight numbers instead of rendering "AI NAN"', () => {
+    for (const flightNumber of ['', '   ', NaN, Infinity, -1, 1.5, true, ['101'], {}]) {
+      expectInvalid(() => formatFlightNumber(seg({ flightNumber })), 'seg.flightNumber', 'type');
+      expectInvalid(() => formatFlightNumber({ flightNumber }), 'seg.flightNumber', 'type');
+    }
+    expect(formatFlightNumber(seg({ flightNumber: 0 }))).toBe('AI 0');
   });
 });
 
@@ -705,6 +822,24 @@ describe('formatBaggage', () => {
     expect(formatBaggage({ included: false })).toBe('Not included');
     expect(formatBaggage({ quantity: 0, included: true })).toBe('Not included');
     expect(formatBaggage({})).toBe('Not included');
+  });
+
+  it('treats zero pieces as not included even when a weight is quoted', () => {
+    expect(formatBaggage({ quantity: 0, weightKg: 23, included: true })).toBe('Not included');
+    expect(formatBaggage({ quantity: 0, weightKg: 23, included: false })).toBe('Not included');
+    expect(formatBaggage({ quantity: 0, weightKg: 23 }, t)).toBe('Not included');
+    const spy = spyT();
+    expect(formatBaggage({ quantity: 0, weightKg: 23 }, spy)).toBe('<common.baggage.notIncluded>');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(
+      formatBaggage([
+        { quantity: 0, weightKg: 23, included: true },
+        { quantity: 1, weightKg: 7, included: true },
+      ])
+    ).toBe('Not included, 1 × 7 kg');
+    // a zero weight does not cancel a piece allowance, and null means "unknown", not zero
+    expect(formatBaggage({ quantity: 1, weightKg: 0, included: true })).toBe('1 piece');
+    expect(formatBaggage({ quantity: null, weightKg: null, included: true })).toBe('Included');
   });
 
   it('joins a list of rules and treats an empty list as not included', () => {
@@ -880,6 +1015,19 @@ describe('maskPhone', () => {
     expectInvalid(() => maskPhone(9876543210), 'p', 'type');
     expectInvalid(() => maskPhone(['91', '9876543210']), 'p', 'type');
     expectInvalid(() => maskPhone({ countryCode: '91', number: {} }), 'p.number', 'type');
+    expectInvalid(() => maskPhone({ countryCode: '91', number: true }), 'p.number', 'type');
+    expectInvalid(
+      () => maskPhone({ countryCode: {}, number: '9876543210' }),
+      'p.countryCode',
+      'type'
+    );
+    expectInvalid(
+      () => maskPhone({ countryCode: true, number: '9876543210' }),
+      'p.countryCode',
+      'type'
+    );
+    // a null country code is simply absent
+    expect(maskPhone({ countryCode: null, number: '9876543210' })).toBe('••••••3210');
   });
 });
 
@@ -902,6 +1050,16 @@ describe('maskCard', () => {
     expect(maskCard('4242', '')).toBe('•••• 4242');
     expect(maskCard('4242', null)).toBe('•••• 4242');
     expect(maskCard('4242', 'cartes_bancaires')).toBe('Cartes bancaires •••• 4242');
+  });
+
+  it('does not resolve brands through Object.prototype', () => {
+    expect(maskCard('4242', 'constructor')).toBe('Constructor •••• 4242');
+    expect(maskCard('4242', 'toString')).toBe('Tostring •••• 4242');
+    expect(maskCard('4242', 'hasOwnProperty')).toBe('Hasownproperty •••• 4242');
+    expect(maskCard('4242', '__proto__')).toBe('Proto •••• 4242');
+    for (const brand of ['constructor', 'valueOf', '__proto__', 'toString']) {
+      expect(maskCard('4242', brand)).not.toMatch(/function|native code|object Object/);
+    }
   });
 
   it('never reveals more than the last four digits', () => {
@@ -970,6 +1128,9 @@ describe('formatReference', () => {
   it('rejects other types', () => {
     expectInvalid(() => formatReference({ reference: 'ABC123' }), 'ref', 'type');
     expectInvalid(() => formatReference(['ABC123']), 'ref', 'type');
+    expectInvalid(() => formatReference(NaN), 'ref', 'type');
+    expectInvalid(() => formatReference(Infinity), 'ref', 'type');
+    expectInvalid(() => formatReference(true), 'ref', 'type');
   });
 });
 
@@ -989,8 +1150,24 @@ describe('formatSeat', () => {
   it('rejects unsupported shapes', () => {
     expectInvalid(() => formatSeat({}), 'seat', 'type');
     expectInvalid(() => formatSeat({ row: 12 }), 'seat', 'type');
+    expectInvalid(() => formatSeat({ row: 12, column: '' }), 'seat', 'type');
+    expectInvalid(() => formatSeat({ column: 'A' }), 'seat', 'type');
     expectInvalid(() => formatSeat(['12A']), 'seat', 'type');
     expectInvalid(() => formatSeat(true), 'seat', 'type');
+    expectInvalid(() => formatSeat(NaN), 'seat', 'type');
+  });
+
+  it('never stringifies nested objects or booleans and never recurses into them', () => {
+    const cyclic = {};
+    cyclic.number = cyclic;
+    expectInvalid(() => formatSeat(cyclic), 'seat.number', 'type');
+    expectInvalid(() => formatSeat({ number: { row: 12, column: 'A' } }), 'seat.number', 'type');
+    expectInvalid(() => formatSeat({ number: true }), 'seat.number', 'type');
+    expectInvalid(() => formatSeat({ number: NaN }), 'seat.number', 'type');
+    expectInvalid(() => formatSeat({ row: true, column: 'A' }), 'seat.row', 'type');
+    expectInvalid(() => formatSeat({ row: 12, column: { a: 1 } }), 'seat.column', 'type');
+    expectInvalid(() => formatSeat({ row: 12, letter: ['A'] }), 'seat.letter', 'type');
+    expect(() => formatSeat(cyclic)).not.toThrow(RangeError);
   });
 });
 

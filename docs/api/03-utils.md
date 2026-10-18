@@ -1,6 +1,6 @@
 # 03 · Utilities
 
-Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated. Exposed as `client.utils.*` and as the `@wayfarer/sdk/utils` entry.
+Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated. Exposed as `client.utils.<script>.*` (every script as a namespace: `client.utils.validation.isGstin`, `client.utils.async.createQueue`, …) plus, flat, every helper of §1–§5, §7 and §8 and the factories (`client.utils.formatMoney`), and as the `@wayfarer/sdk/utils` entry; `object` helpers stay namespaced (`get`, `set`, `hash` are too generic for the flat surface).
 
 ---
 
@@ -9,7 +9,7 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 | signature | task |
 |---|---|
 | `money(amount: string\|number, currency) → Money` | Construct, normalising to the currency's decimals |
-| `parseMoney(input: string\|object) → Money` | Accept `"INR 1,234.50"`, `{amount,currency}`, minor‑unit ints with `currency` |
+| `parseMoney(input: string\|number\|object, { currency?, minor? }) → Money` | Accept `"INR 1,234.50"`, `"₹1,234.50"` / bare numbers with `currency`, `{amount,currency}`; a number is a **major**‑unit amount unless `minor: true` (then an integer count of minor units: `123450` → `1234.50`) |
 | `formatMoney(m, { locale?, display?: 'symbol'\|'code'\|'narrow', fraction?: 'auto'\|number, signDisplay? }) → string` | `Intl.NumberFormat` with per‑currency decimals (JPY 0, BHD 3) |
 | `toMinor(m) → bigint` · `fromMinor(minor, currency) → Money` | Exact integer arithmetic base |
 | `add(a, b)` · `subtract(a, b)` · `multiply(m, n)` · `sum(list)` · `negate(m)` → `Money` | Exact; throw `ValidationError` on currency mismatch |
@@ -23,16 +23,16 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 
 | signature | task |
 |---|---|
-| `parseLocal(dt: DateTime) → { wall: Date, offsetMinutes, iso }` | Keep airport local time intact (no tz shift) |
+| `parseLocal(dt: DateTime) → { wall: Date, offsetMinutes, iso, localTimeOnly }` | Keep airport local time intact (no tz shift); `localTimeOnly` is `true` when the input carried no offset |
 | `formatTime(dt, { locale?, hour12?, tz?: 'local'\|'airport' }) → string` · `formatDate(dt\|DateStr, { style?: 'short'\|'medium'\|'long'\|'weekday' })` · `formatDateTime` · `formatDateRange(a, b)` | Intl‑based |
 | `formatDuration(minutes, { style?: 'short'\|'long'\|'compact', locale? }) → string` | `2h 35m` / `2 hr 35 min` |
 | `durationBetween(a: DateTime, b: DateTime) → number` | minutes, offset‑aware |
 | `dayDiff(a: DateTime, b: DateTime) → number` | `+1` badges (compares local calendar dates) |
-| `isOvernight(a, b) → boolean` · `timeBucket(dt) → TimeBucket` · `minutesOfDay(dt) → number` | |
-| `addDays(d: DateStr, n)` · `diffDays(a, b)` · `today(tz?)` · `isPast(dt)` · `toDateKey(Date)` · `fromDateKey(DateStr)` · `clampDate(d, min, max)` | |
+| `isOvernight(a, b) → boolean` · `timeBucket(dt, { night? }) → TimeBucket` · `minutesOfDay(dt) → number` | `night: true` returns the `night` alias instead of `early_morning` |
+| `addDays(d: DateStr, n)` · `diffDays(a, b)` · `today(tz?, now?)` · `isPast(dt)` · `toDateKey(Date)` · `fromDateKey(DateStr)` · `clampDate(d, min, max)` | |
 | `monthMatrix(year, month, { firstDay? }) → (DateStr\|null)[][]` | Calendar grid |
-| `relativeTime(dt, { locale? }) → string` | "in 3 days", "2 h ago" |
-| `countdown(until: DateTime\|number, onTick: (remainingMs) => void, { intervalMs? }) → stop` | **Effects: timer** |
+| `relativeTime(dt, { locale?, style? }) → string` | "in 3 days", "2 hours ago" (`style: 'short'` → "2 hr. ago") |
+| `countdown(until: DateTime\|number, onTick: (remainingMs) => void, { intervalMs?, timers?, now? }) → stop` | **Effects: timer** (`timers` / `now` injectable for tests) |
 | `ageAt(dob: DateStr, on: DateStr) → number` | years |
 | `paxTypeForAge(age, rules: AgeRules) → PaxType` | |
 
@@ -40,16 +40,16 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 
 | signature | task |
 |---|---|
-| `formatPlace(p: Place, style: 'code'\|'city'\|'city_code'\|'airport'\|'full') → string` | `Delhi (DEL)` |
-| `formatRoute(slices\|params, { arrow? }) → string` | `DEL → BOM → DEL` |
+| `formatPlace(p: Place, style: 'code'\|'city'\|'city_code'\|'airport'\|'full' = 'city_code') → string` | `Delhi (DEL)` |
+| `formatRoute(slices\|params, { arrow?, style? }) → string` | `DEL → BOM → DEL` (`style` as in `formatPlace`) |
 | `formatStops(n, t) → string` · `formatLayovers(slice, t) → string` | `1 stop · 2h 10m in DXB` |
 | `formatPaxSummary(pax: PaxCounts, t) → string` | `2 adults, 1 child` |
 | `formatFlightNumber(seg) → string` · `formatOperatedBy(seg, t) → string\|null` | `AI 101`, `Operated by Vistara` |
 | `formatCabin(cabin, t)` · `formatFareType(ft, t)` · `formatPaxType(pt, t)` | |
 | `formatBaggage(rule: BagRule, t) → string` | `1 × 23 kg` |
-| `formatName(traveler, { order?: 'given_first'\|'family_first' })` · `initials(traveler)` | |
+| `formatName(traveler, { order?: 'given_first'\|'family_first', middle? = true, title? = false })` · `initials(traveler)` | |
 | `maskEmail(e)` · `maskPhone(p)` · `maskCard(last4, brand)` · `maskDocument(number)` | PII‑safe display |
-| `formatReference(ref) → string` · `formatSeat(seat)` · `titleCase(s)` · `truncate(s, n)` | |
+| `formatReference(ref) → string` · `formatSeat(seat)` · `titleCase(s)` · `truncate(s, n, ellipsis = '…')` | |
 
 ## 4. `utils/validation.js`
 
@@ -84,16 +84,16 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 
 ## 7. `utils/id.js`
 
-`uuid()` · `shortId(n = 8)` · `requestId()` · `idempotencyKey(scope: string, payload?: object) → string` (stable hash of scope + payload) · `isUuid(s)`
+`uuid()` · `shortId(n = 8)` · `requestId()` · `idempotencyKey(scope: string, payload?: object) → string` (stable 53‑bit hash of scope + payload: two different payloads in one scope collide with probability ≈ n²/2⁵⁴, fine per user / booking flow, not a cross‑tenant dedupe key) · `isUuid(s)`
 
 ## 8. `utils/url.js`
 
 | signature | task |
 |---|---|
 | `buildQuery(obj, { arrayFormat?: 'repeat'\|'comma'\|'bracket', skipNull? }) → string` · `parseQuery(str) → object` | |
-| `joinUrl(base, path)` · `withParams(url, params)` · `isAbsoluteUrl(s)` · `sameOrigin(a, b)` | |
-| `encodeSearchParams(p: SearchParams) → string` · `decodeSearchParams(str) → SearchParams` | Compact, human‑readable deep‑link format (`DEL-BOM/2026-11-02/2026-11-09?a=2&c=1&cabin=Y`) |
-| `encodeState(obj) → string` · `decodeState(str) → object` | base64url JSON for redirect round‑trips |
+| `joinUrl(base, path)` · `withParams(url, params)` · `isAbsoluteUrl(s)` · `sameOrigin(a, b)` | `sameOrigin` resolves relative inputs against `window.location` at call time (SSR: two relative URLs are same‑origin, relative vs absolute is not) |
+| `encodeSearchParams(p: SearchParams) → string` · `decodeSearchParams(str) → SearchParams\|null` | Compact, human‑readable deep‑link format (`DEL-BOM/2026-11-02/2026-11-09?a=2&c=1&cabin=Y`); the decoder also accepts a full URL / mount prefix and returns `null` on malformed input (never throws) |
+| `encodeState(obj) → string` · `decodeState(str) → object\|null` | base64url JSON (objects / arrays only) for redirect round‑trips; `null` on malformed input |
 | `currentUrlParams() → object` | Browser only |
 
 ## 9. `utils/i18n.js`
@@ -103,9 +103,10 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 | `createI18n({ locale, messages?, fallback = 'en', pluralRules?, missing? }) → I18n` | |
 | `i18n.t(key, vars?, { count?, default? }) → string` | ICU‑lite (`{name}`, `{count, plural, one{} other{}}`) |
 | `i18n.setLocale(locale)` · `i18n.getLocale()` · `i18n.dir() → 'ltr'\|'rtl'` | **emit** `prefs:change` (via client) |
-| `i18n.addMessages(locale, messages, { merge? })` · `i18n.hasKey(key)` · `i18n.loadMessages(locale, loader)` | |
+| `i18n.addMessages(locale, messages, { merge? })` · `i18n.hasKey(key, locale?)` · `i18n.loadMessages(locale, loader)` | `loader()` may resolve a `Messages` bundle, a `{ default }` module or a module namespace |
 | `i18n.formatList(items)` · `i18n.formatNumber(n)` · `i18n.formatPercent(n)` | |
-| `i18n.onChange(fn) → off` | |
+| `i18n.onChange(fn) → off` | `fn({ type: 'locale'\|'messages', locale, previous?, dir })` |
+| `i18n.missing() → string[]` · `i18n.locales() → string[]` · `i18n.destroy()` | keys asked for but unresolved · locales with a bundle · drop listeners |
 
 ## 10. `utils/telemetry.js`
 
@@ -114,19 +115,19 @@ Scripts under `utils/`. Everything here is pure (`Effects: none`) unless stated.
 | `createTelemetry({ adapters?, enabled?, sampleRate?, context?, consent? }) → Telemetry` | |
 | `telemetry.track(event, props?)` · `telemetry.page(name, props?)` · `telemetry.identify(userId, traits?)` · `telemetry.timing(name, ms, props?)` | Fan‑out to adapters · **emit** `telemetry:track` |
 | `telemetry.setContext(partial)` · `telemetry.setConsent(bool)` · `telemetry.addAdapter(a) → remove` · `telemetry.flush()` | |
-| `bindDomainEvents(telemetry, events) → off` | Maps SDK events → commerce events (`search` → `view_item_list`, `offer:selected` → `select_item`, `itinerary:created` → `add_to_cart`, `booking:created` → `begin_checkout`, `payment:intentCreated` → `add_payment_info`, `booking:ticketed` → `purchase`, `trip:cancelled` → `refund`) |
+| `bindDomainEvents(telemetry, events) → off` | Maps SDK events → commerce events (`search:complete` → `view_item_list`, `offer:selected` → `select_item`, `itinerary:created` → `add_to_cart`, `booking:created` → `begin_checkout`, `payment:intentCreated` → `add_payment_info`, `booking:ticketed` → `purchase`, `trip:cancelled` → `refund`) |
 | `ga4Adapter({ gtag })` · `gtmAdapter({ dataLayer })` · `segmentAdapter({ analytics })` · `consoleAdapter()` · `beaconAdapter({ url })` | `TelemetryAdapter = { name, track, page?, identify?, flush? }` |
 
 ## 11. `utils/logger.js`
 
-`createLogger({ level, sink?, redact?, scope? }) → Logger` · `logger.debug/info/warn/error(msg, data?)` · `logger.child(scope)` · `logger.setLevel(level)` · `logger.redact(obj) → obj` (masks keys and card/document‑like values)
+`createLogger({ level, sink?, redact?, scope? }) → Logger` · `logger.debug/info/warn/error(msg, data?)` · `logger.child(scope)` · `logger.setLevel(level)` · `logger.redact(obj) → obj` (masks matching keys — `authorization`, `password`, `card`, `documents`, `passport`, … — and card‑PAN‑like values; document numbers have no detectable shape and are masked by key only)
 
 ## 12. `utils/features.js`
 
 | signature | task / effects |
 |---|---|
-| `createFeatures({ initial?, source?: () => Promise<Record<string, unknown>> }) → Features` | |
+| `createFeatures({ initial?, source?: () => Promise<Record<string, unknown>>, events?, store? }) → Features` | `events` receives `features:change`; `store.bootstrap.flags` mirrors the effective flags |
 | `features.isEnabled(flag, default = false) → boolean` · `features.variant(experiment, default?) → string` · `features.get(flag)` | |
 | `features.set(flags)` · `features.override(flag, value)` (dev) · `features.clearOverrides()` | **state** `bootstrap.flags` · **emit** `features:change` |
-| `features.load() → Promise<void>` | **net** via `source` (default `GET /config`) |
-| `features.onChange(fn) → off` | |
+| `features.load() → Promise<void>` | **net** via `source` (the client wires `client.bootstrap()`, i.e. `GET /v1/config`) |
+| `features.onChange(fn) → off` · `features.destroy()` | |

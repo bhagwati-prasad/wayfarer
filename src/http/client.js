@@ -8,12 +8,16 @@
  * into an `SdkError` → error interceptors (recover with a response, replace the error, or
  * `ctx.retry()`) → retry policy (network / timeout / 408 / 425 / 429 / 5xx, idempotent requests only,
  * exponential backoff with jitter, `Retry-After` honoured) → hook `onRetry` → back to cache / dedupe.
- * Also `download`, `upload`, `stream` (SSE + NDJSON with reconnect), tag aborts, a storage‑backed
- * response cache and `http:*` events. Interceptors mutate, hooks only observe (their exceptions are
- * swallowed and logged). It must not keep module‑level mutable state, must not touch `window` /
- * `document` / `localStorage`, must not log through `console`, must never throw a plain `Error`
- * (only the classes of `src/errors/index.js`), and must never inspect domain error codes — the
- * `problemInterceptor` and the modules own that.
+ * A `ctx.retry()` runs that same cache / dedupe → … pipeline once more for the next attempt (one
+ * `http:retry` per retry, one `http:response` or `http:error` per request); whatever it settles with
+ * is final and is not fed through the remaining interceptors of the outer attempt again. Also
+ * `download`, `upload`, `stream` (SSE + NDJSON with reconnect), tag aborts (which also close open
+ * streams), a storage‑backed response cache keyed by method + url (+ body) and `http:*` events.
+ * Interceptors mutate, hooks only observe (their exceptions are swallowed and logged). The caller's
+ * `spec` / `opts` are never mutated. It must not keep module‑level mutable state, must not touch
+ * `window` / `document` / `localStorage`, must not log through `console`, must never throw a plain
+ * `Error` (only the classes of `src/errors/index.js`), and must never inspect domain error codes —
+ * the `problemInterceptor` and the modules own that.
  */
 
 import {
@@ -30,7 +34,7 @@ import {
   wrap,
 } from '../errors/index.js';
 import { requestId as newRequestId } from '../utils/id.js';
-import { hash, isPlainObject } from '../utils/object.js';
+import { hash, isPlainObject, stableStringify } from '../utils/object.js';
 import { buildQuery, joinUrl } from '../utils/url.js';
 import { combineSignals } from '../utils/async.js';
 
@@ -63,7 +67,13 @@ import { combineSignals } from '../utils/async.js';
  */
 
 /**
- * Options of `http.stream` (a `RequestOpts` plus stream controls).
+ * Options of `http.stream` (a `RequestOpts` plus stream controls). `reconnect` (default `true`)
+ * re‑opens the connection with exponential backoff (`reconnectBaseMs` 1000 → `reconnectMaxMs` 30000,
+ * or the server's SSE `retry:` hint) after a transport failure, a retryable status or a clean SSE end;
+ * `maxReconnects` caps the *consecutive* reconnects without a delivered event (the budget resets once a
+ * connection delivers one). The stream ends when `opts.signal` aborts, on `close()`, when
+ * `http.abort(opts.tag)` / `http.abortAll()` / `http.destroy()` run, or when a non‑retryable error
+ * occurs (the iteration then rejects with it).
  * @typedef {RequestOpts & {
  *   method?: string, body?: unknown, reconnect?: boolean, maxReconnects?: number,
  *   reconnectBaseMs?: number, reconnectMaxMs?: number
@@ -71,7 +81,7 @@ import { combineSignals } from '../utils/async.js';
  */
 
 /**
- * The async iterable returned by `http.stream`.
+ * The async iterable returned by `http.stream`. Concurrent `next()` calls are answered in order.
  * @typedef {AsyncIterable<StreamEvent> & AsyncIterator<StreamEvent> & { close: () => void, readonly closed: boolean }} HttpStream
  */
 
@@ -454,6 +464,13 @@ export function createHttp(options = {}) {
   const inflightSet = new Map();
   /** Dedupe registry: key → { id, promise }. */
   const inflightByKey = new Map();
+  /**
+   * Open streams. Once its headers arrived a stream is no longer in `inflightSet`, so `abort` /
+   * `abortAll` / `destroy` reach it through this registry. `connecting` is true while the stream's
+   * own request is in flight (then `inflightSet` already accounts for it).
+   * @type {Set<{ tag: string|undefined, connecting: boolean, close: () => void }>}
+   */
+  const openStreams = new Set();
   let lastId;
   let destroyed = false;
 
@@ -559,6 +576,7 @@ export function createHttp(options = {}) {
     const headers = applyDefaults
       ? mergeHeaders(resolveDefaultHeaders(), s.headers)
       : mergeHeaders(s.headers);
+    // Every container the lifecycle may write to is copied: the caller's `opts` stay untouched.
     return {
       ...s,
       method: s.method.trim().toUpperCase(),
@@ -567,8 +585,8 @@ export function createHttp(options = {}) {
       timeoutMs: s.timeoutMs === undefined ? defaultTimeoutMs : s.timeoutMs,
       retries: s.retries === undefined ? defaultRetries : s.retries,
       responseType: s.responseType || 'json',
-      cache: s.cache || false,
-      meta: isPlainObject(s.meta) ? s.meta : {},
+      cache: s.cache ? { ...s.cache } : false,
+      meta: isPlainObject(s.meta) ? { ...s.meta } : {},
     };
   }
 
@@ -604,17 +622,40 @@ export function createHttp(options = {}) {
   }
 
   // ── cache ──
+  /**
+   * Stable text of a request body for cache / dedupe identity: `''` for none, the string itself,
+   * a key‑order‑independent serialisation for JSON bodies, `undefined` when it cannot be keyed
+   * (binary / multipart / unserialisable).
+   */
+  function bodyKeyOf(body) {
+    if (body === undefined || body === null) return '';
+    if (typeof body === 'string') return body;
+    if (isRawBody(body)) return undefined;
+    try {
+      return stableStringify(body);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Logical cache key: `spec.cache.key`, else `METHOD url` plus the body (so two POSTs with different
+   * payloads never share an entry); `undefined` when the request is not cacheable.
+   */
   function cacheLogicalKey(spec, url) {
-    return spec.cache && typeof spec.cache.key === 'string' && spec.cache.key
-      ? spec.cache.key
-      : `${spec.method} ${url}`;
+    if (!spec.cache) return undefined;
+    if (typeof spec.cache.key === 'string' && spec.cache.key) return spec.cache.key;
+    const bodyKey = bodyKeyOf(spec.body);
+    if (bodyKey === undefined) return undefined;
+    return `${spec.method} ${url}${bodyKey ? `\n${bodyKey}` : ''}`;
   }
   const cacheStorageKey = (logicalKey) => `${CACHE_PREFIX}${hash(logicalKey)}`;
 
   function readCache(spec, url) {
-    if (!spec.cache) return undefined;
+    const logicalKey = cacheLogicalKey(spec, url);
+    if (logicalKey === undefined) return undefined;
     try {
-      const entry = store.get(cacheStorageKey(cacheLogicalKey(spec, url)));
+      const entry = store.get(cacheStorageKey(logicalKey));
       if (!entry || typeof entry !== 'object') return undefined;
       return entry;
     } catch (e) {
@@ -624,10 +665,11 @@ export function createHttp(options = {}) {
   }
 
   function writeCache(spec, url, res) {
-    if (!spec.cache || res.status < 200 || res.status >= 300) return;
+    if (res.status < 200 || res.status >= 300) return;
     if (spec.responseType === 'blob' || spec.responseType === 'stream') return;
+    const logicalKey = cacheLogicalKey(spec, url);
+    if (logicalKey === undefined) return;
     try {
-      const logicalKey = cacheLogicalKey(spec, url);
       store.set(
         cacheStorageKey(logicalKey),
         {
@@ -651,14 +693,8 @@ export function createHttp(options = {}) {
     const m = spec.method;
     const wanted = spec.dedupe === true || (spec.dedupe !== false && (m === 'GET' || m === 'HEAD'));
     if (!wanted) return undefined;
-    const b = spec.body;
-    let bodyKey = '';
-    if (b !== undefined && b !== null) {
-      if (typeof b === 'string') bodyKey = b;
-      else if (isRawBody(b))
-        return undefined; // binary / multipart bodies are never deduped
-      else bodyKey = JSON.stringify(b);
-    }
+    const bodyKey = bodyKeyOf(spec.body);
+    if (bodyKey === undefined) return undefined; // binary / multipart bodies are never deduped
     return `${m} ${url}${bodyKey ? `\n${bodyKey}` : ''}`;
   }
 
@@ -705,11 +741,18 @@ export function createHttp(options = {}) {
   }
 
   // ── normalise ──
-  function normaliseError(e, ctx, signal) {
+  /**
+   * Turn anything thrown into an `SdkError` carrying the request id. An aborted `signal` wins (its
+   * reason is the `AbortError` / `TimeoutError`). Only `transport` failures (the `fetch` call, the
+   * body read) map a bare `TypeError` to `NetworkError`; a `TypeError` thrown by an interceptor is a
+   * programming error and goes through `wrap` (so it is not retried as a network blip).
+   * @param {unknown} e @param {{ id: string }} ctx @param {AbortSignal} [signal] @param {boolean} [transport]
+   */
+  function normaliseError(e, ctx, signal, transport = false) {
     let err;
     if (isSdkError(e)) err = /** @type {SdkError} */ (e);
     else if (signal && signal.aborted) err = abortErrorFor(signal);
-    else if (e instanceof TypeError)
+    else if (transport && e instanceof TypeError)
       err = new NetworkError(e.message || 'Network error', { cause: e });
     else err = wrap(e);
     if (!err.requestId) err.requestId = ctx.id;
@@ -735,6 +778,12 @@ export function createHttp(options = {}) {
     const meta = new Map(Object.entries(spec0.meta || {}));
     /** Per‑attempt signal (base + timeout); replaced on each attempt. */
     let attemptSignal = baseSignal;
+    /**
+     * Results and errors that already completed a nested `attempt()` through `ctx.retry()`: they ran
+     * the remaining interceptors, the retry policy, the cache write and the events, so the outer
+     * attempt returns / throws them as they are instead of processing them a second time.
+     */
+    const settledByRetry = new WeakSet();
 
     /** @type {HttpContext & { response?: Response }} */
     const ctx = {
@@ -764,10 +813,21 @@ export function createHttp(options = {}) {
       async retry(options = {}) {
         const r = options || {};
         if (r.spec !== undefined) ctx.spec = normaliseSpec(r.spec, false);
-        if (typeof r.delayMs === 'number' && r.delayMs > 0) await wait(r.delayMs, baseSignal);
+        const delayMs = typeof r.delayMs === 'number' && r.delayMs > 0 ? r.delayMs : 0;
+        if (baseSignal.aborted) throw abortErrorFor(baseSignal);
+        announceRetry(delayMs);
+        if (delayMs > 0) await wait(delayMs, baseSignal);
         if (baseSignal.aborted) throw abortErrorFor(baseSignal);
         ctx.attempt += 1;
-        return attempt();
+        try {
+          const res = await attempt();
+          settledByRetry.add(res);
+          return res;
+        } catch (e) {
+          const err = normaliseError(e, ctx, baseSignal);
+          settledByRetry.add(err);
+          throw err;
+        }
       },
       abort(reason) {
         if (!controller.signal.aborted) controller.abort(toAbortReason(reason, 'aborted'));
@@ -777,10 +837,25 @@ export function createHttp(options = {}) {
       },
     };
     inflightSet.set(id, { ctx, controller });
+    /** The one dedupe key this request leads (see `attempt`). @type {{ key: string, deferred: ReturnType<typeof createDeferred> } | undefined} */
     let dedupeOwned;
 
     const throwIfAborted = () => {
       if (attemptSignal.aborted) throw abortErrorFor(attemptSignal);
+    };
+
+    /** Announce the next attempt: hook `onRetry` + `http:retry` (shared by the policy and `ctx.retry`). */
+    const announceRetry = (delayMs) => {
+      runHook('onRetry', ctx, delayMs);
+      emit('http:retry', {
+        id,
+        method: ctx.spec.method,
+        url: urlOf(ctx.spec),
+        attempt: ctx.attempt + 1,
+        delayMs,
+        error: ctx.error,
+        tag: ctx.spec.tag,
+      });
     };
 
     const finish = (res, extra = {}) => {
@@ -851,7 +926,7 @@ export function createHttp(options = {}) {
         return { response, url, clear };
       } catch (e) {
         clear();
-        throw normaliseError(e, ctx, signal);
+        throw normaliseError(e, ctx, signal, true);
       }
     }
 
@@ -924,7 +999,7 @@ export function createHttp(options = {}) {
             const res = finish({
               data: hit.data,
               status: hit.status,
-              headers: new Headers(hit.headers || []),
+              headers: new Headers(Array.isArray(hit.headers) ? hit.headers : []),
               requestId: hit.requestId,
               meta: hit.meta,
               fromCache: true,
@@ -955,7 +1030,12 @@ export function createHttp(options = {}) {
                 deduped: true,
               });
               const shared = await followLeader(leader.promise);
-              const res = finish({ ...shared, meta: { ...shared.meta, deduped: true } });
+              // Own `Headers` (they are mutable); `data` is shared by design.
+              const res = finish({
+                ...shared,
+                headers: new Headers(shared.headers),
+                meta: { ...shared.meta, deduped: true },
+              });
               emit('http:response', {
                 id,
                 method: spec.method,
@@ -969,7 +1049,10 @@ export function createHttp(options = {}) {
               });
               return res;
             }
-            if (!leader) {
+            // A request leads at most one key. After a retry that changed the URL it keeps serving
+            // the followers of its original key; registering a second key would orphan the first
+            // entry and hang every later identical request behind a promise that never settles.
+            if (!leader && !dedupeOwned) {
               dedupeOwned = { key, deferred: createDeferred() };
               inflightByKey.set(key, { id, promise: dedupeOwned.deferred.promise });
             }
@@ -995,7 +1078,13 @@ export function createHttp(options = {}) {
           let res;
           try {
             if (response.status < 200 || response.status >= 300) throw await errorFor(response);
-            const data = await parse(response);
+            let data;
+            try {
+              data = await parse(response);
+            } catch (e) {
+              // A body read failing mid‑way is a transport error (or the timeout / abort firing).
+              throw normaliseError(e, ctx, attemptSignal, true);
+            }
             ctx.data = data;
             res = finish({
               data,
@@ -1009,12 +1098,14 @@ export function createHttp(options = {}) {
           }
           for (const entry of stages.response.entries()) {
             const out = await entry.fn(res, ctx);
+            // A nested `ctx.retry()` finished the pipeline (interceptors, cache, events) already.
+            if (settledByRetry.has(out)) return out;
+            throwIfAborted();
             if (isHttpResponse(out))
               res = finish(
                 { ...out, fromCache: out.fromCache === true },
                 { attempts: ctx.attempt }
               );
-            throwIfAborted();
           }
           ctx.data = res.data;
           writeCache(spec, url, res);
@@ -1030,7 +1121,12 @@ export function createHttp(options = {}) {
           });
           return res;
         } catch (raw) {
+          // An error settled by a nested `ctx.retry()` went through interceptors + policy already.
+          if (settledByRetry.has(raw)) throw raw;
           let err = normaliseError(raw, ctx, attemptSignal);
+          // The attempt is over: from here on `ctx.signal`, waits and abort checks follow the
+          // request‑level signal (a fired per‑attempt timeout must not read as "request aborted").
+          attemptSignal = baseSignal;
           ctx.error = err;
           // error interceptors
           let recovered;
@@ -1041,12 +1137,19 @@ export function createHttp(options = {}) {
             } catch (e) {
               out = e;
             }
+            if (settledByRetry.has(out)) {
+              if (isHttpResponse(out)) return out;
+              throw out;
+            }
+            // Aborted while the interceptor was running (e.g. awaiting a token refresh): the
+            // request rejects with the AbortError, whatever the interceptor produced.
+            if (baseSignal.aborted) throw abortErrorFor(baseSignal);
             if (isHttpResponse(out)) {
               recovered = out;
               break;
             }
             if (out instanceof Error || isSdkError(out)) {
-              err = normaliseError(out, ctx, attemptSignal);
+              err = normaliseError(out, ctx, baseSignal);
               ctx.error = err;
             }
           }
@@ -1073,16 +1176,7 @@ export function createHttp(options = {}) {
           // retry policy
           const delayMs = baseSignal.aborted ? null : retryDelayFor(err, ctx);
           if (delayMs === null) throw err;
-          runHook('onRetry', ctx, delayMs);
-          emit('http:retry', {
-            id,
-            method: spec.method,
-            url,
-            attempt: ctx.attempt + 1,
-            delayMs,
-            error: err,
-            tag: spec.tag,
-          });
+          announceRetry(delayMs);
           await wait(delayMs, baseSignal);
           ctx.attempt += 1;
         }
@@ -1262,8 +1356,8 @@ export function createHttp(options = {}) {
     const so = /** @type {StreamOpts} */ (opts || {});
     /** @type {StreamEvent[]} */
     const queue = [];
-    /** @type {{ resolve: Function, reject: Function } | null} */
-    let waiter = null;
+    /** Pending `next()` calls, answered in order. @type {Array<{ resolve: Function, reject: Function }>} */
+    const waiters = [];
     let closed = false;
     let ended = false;
     /** @type {SdkError | null} */
@@ -1274,25 +1368,30 @@ export function createHttp(options = {}) {
     const maxReconnects = typeof so.maxReconnects === 'number' ? so.maxReconnects : Infinity;
     const baseMs = typeof so.reconnectBaseMs === 'number' ? so.reconnectBaseMs : 1000;
     const maxMs = typeof so.reconnectMaxMs === 'number' ? so.reconnectMaxMs : 30000;
+    /** Consecutive reconnects without a delivered event (backoff exponent and budget). */
     let reconnects = 0;
+    /** Events delivered so far (a connection that delivers resets `reconnects`). */
+    let delivered = 0;
     /** @type {string|undefined} */
     let lastEventId;
     /** @type {number|undefined} */
     let retryHint;
+    /** Registry entry so `abort(tag)` / `abortAll()` / `destroy()` can close this stream. */
+    const registration = { tag: so.tag, connecting: false, close: () => close() };
+    openStreams.add(registration);
 
     const push = (event) => {
       if (closed) return;
-      if (waiter) {
-        const w = waiter;
-        waiter = null;
-        w.resolve({ value: event, done: false });
-      } else queue.push(event);
+      delivered += 1;
+      const w = waiters.shift();
+      if (w) w.resolve({ value: event, done: false });
+      else queue.push(event);
     };
     const settleEnd = () => {
       ended = true;
-      if (waiter) {
-        const w = waiter;
-        waiter = null;
+      openStreams.delete(registration);
+      while (waiters.length > 0) {
+        const w = waiters.shift();
         if (failure && !closed) w.reject(failure);
         else w.resolve({ value: undefined, done: true });
       }
@@ -1419,6 +1518,8 @@ export function createHttp(options = {}) {
         /** @type {SdkError | null} */
         let error = null;
         let mode = 'sse';
+        const deliveredBefore = delivered;
+        registration.connecting = true;
         try {
           const res = await request({
             ...rest,
@@ -1436,14 +1537,19 @@ export function createHttp(options = {}) {
             dedupe: false,
             signal,
           });
+          registration.connecting = false;
           mode = /text\/event-stream/i.test(res.headers.get('content-type') || '')
             ? 'sse'
             : 'ndjson';
           await consume(res.data, mode);
         } catch (e) {
           error = normaliseErrorForStream(e);
+        } finally {
+          registration.connecting = false;
         }
         if (closed || signal.aborted) break;
+        // A connection that delivered events made progress: backoff and the reconnect budget restart.
+        if (delivered > deliveredBefore) reconnects = 0;
         if (error === null) {
           // Clean end: EventSource semantics for SSE (reconnect), a finite document for NDJSON.
           if (mode === 'ndjson' || !reconnect || reconnects >= maxReconnects) break;
@@ -1467,9 +1573,13 @@ export function createHttp(options = {}) {
       settleEnd();
     }
 
+    /** `request()` already yields SdkErrors; anything else comes from the body read (transport). */
     function normaliseErrorForStream(e) {
       if (isSdkError(e)) return /** @type {SdkError} */ (e);
       if (signal.aborted) return abortErrorFor(signal);
+      // A body that dies mid‑stream surfaces as a bare TypeError (`terminated`, `fetch failed`).
+      if (e instanceof TypeError)
+        return new NetworkError(e.message || 'Network error', { cause: e });
       return wrap(e);
     }
 
@@ -1491,7 +1601,7 @@ export function createHttp(options = {}) {
           return Promise.resolve({ value: undefined, done: true });
         }
         return new Promise((resolve, reject) => {
-          waiter = { resolve, reject };
+          waiters.push({ resolve, reject });
         });
       },
       return() {
@@ -1573,17 +1683,26 @@ export function createHttp(options = {}) {
   }
 
   // ── public: abort / inflight ──
+  /**
+   * Abort every in‑flight request whose tag passes `predicate` and close every open stream whose
+   * tag does; returns how many were stopped (a stream whose own request was just aborted counts once).
+   */
   function abortMatching(predicate, reason, fallback) {
     let count = 0;
     for (const { ctx, controller } of Array.from(inflightSet.values())) {
-      if (!predicate(ctx)) continue;
+      if (!predicate(ctx.spec.tag)) continue;
       if (controller.signal.aborted) continue;
       controller.abort(toAbortReason(reason, fallback));
       count += 1;
     }
+    for (const stream of Array.from(openStreams)) {
+      if (!predicate(stream.tag)) continue;
+      if (!stream.connecting) count += 1;
+      stream.close();
+    }
     return count;
   }
-  const abort = (tag, reason) => abortMatching((ctx) => ctx.spec.tag === tag, reason, 'aborted');
+  const abort = (tag, reason) => abortMatching((t) => t === tag, reason, 'aborted');
   const abortAll = (reason) => abortMatching(() => true, reason, 'aborted');
   function inflight(tag) {
     if (tag === undefined) return inflightSet.size;
@@ -1634,11 +1753,12 @@ export function createHttp(options = {}) {
 
   function destroy() {
     if (destroyed) return;
-    abortAll('destroyed');
+    abortAll('destroyed'); // requests and open streams (their reconnect timers go with them)
     destroyed = true;
     for (const stage of Object.values(stages)) stage.clear();
     hooks.clear();
     inflightByKey.clear();
+    openStreams.clear();
   }
 
   /** @type {Http} */
@@ -1692,10 +1812,10 @@ export function createHttp(options = {}) {
  * @property {(name: string) => void} removeHeader
  * @property {(url: string) => void} setBaseUrl
  * @property {(fn: typeof fetch | undefined) => void} setFetch
- * @property {(tag: string, reason?: unknown) => number} abort  Abort in‑flight requests with `tag`; returns the count.
- * @property {(reason?: unknown) => number} abortAll
+ * @property {(tag: string, reason?: unknown) => number} abort  Abort in‑flight requests with `tag` (their promises reject with `AbortError`) and close open streams with `tag`; returns the count.
+ * @property {(reason?: unknown) => number} abortAll  Same for every request and stream.
  * @property {{ clear: (pattern?: string | RegExp) => void, invalidate: (key: string) => void }} cache
  * @property {(tag?: string) => number} inflight
  * @property {() => string | undefined} lastRequestId
- * @property {() => void} destroy  Abort everything, drop interceptors and hooks; later requests reject with `AbortError`.
+ * @property {() => void} destroy  Abort every request, close every stream (no timer survives), drop interceptors and hooks; later requests reject with `AbortError`.
  */

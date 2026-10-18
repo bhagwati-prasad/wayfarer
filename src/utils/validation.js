@@ -12,7 +12,8 @@
  * time and can be overridden (`ctx.today` / `ctx.now`, or the trailing `now` of `cardExpiryValid`).
  * User data never throws — it produces issues; a plain `Error` is never thrown, only
  * `ValidationError`, and only for malformed programmer input (a broken schema, an unparseable
- * reference date). Nothing is ever mutated: neither the value under validation nor the schemas.
+ * reference date, inconsistent age bands). Nothing is ever mutated: neither the value under
+ * validation nor the schemas.
  */
 
 import { ValidationError } from '../errors/index.js';
@@ -82,7 +83,8 @@ import { addDays, ageAt, paxTypeForAge, today } from './datetime.js';
  * @property {number} [minLength]                                  minimum string / array length
  * @property {number} [maxLength]                                  maximum string / array length
  * @property {readonly unknown[]} [enum]                           allowed values (strict equality)
- * @property {(value: any, info: RuleInfo) => CustomResult} [custom]  last check, run only when the node's own checks passed
+ * @property {(value: any, info: RuleInfo) => CustomResult} [custom]  last check, run only when the node's own
+ *   checks (type / pattern / bounds / enum) passed; issues in `items` / `props` children never block it
  * @property {(parent: any, info: RuleInfo) => boolean} [when]     the rule applies only when this returns `true`
  * @property {Schema} [items]                                      schema for every array element (`path[i]`)
  * @property {Record<string, Schema>} [props]                      schemas for object properties (`path.key`); unknown keys are ignored
@@ -335,6 +337,11 @@ function isFiniteNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+/** A number above zero; `Infinity` counts, `NaN` does not. @param {unknown} v @returns {v is number} */
+function isPositiveNumber(v) {
+  return typeof v === 'number' && v > 0;
+}
+
 /** @param {unknown} v @returns {v is string} */
 function isNonEmptyString(v) {
   return typeof v === 'string' && v.trim() !== '';
@@ -345,7 +352,11 @@ function isObjectLike(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-/** `true` for a real `YYYY-MM-DD` calendar date. @param {unknown} v @returns {v is DateStr} */
+/**
+ * `true` for a real `YYYY-MM-DD` calendar date (any year `0000`‑`9999`; `setUTCFullYear` is used
+ * because `Date.UTC` reads years below 100 as 19xx).
+ * @param {unknown} v @returns {v is DateStr}
+ */
 function isDateStr(v) {
   if (typeof v !== 'string') return false;
   const m = DATE_RE.exec(v);
@@ -354,7 +365,8 @@ function isDateStr(v) {
   const mo = Number(m[2]);
   const d = Number(m[3]);
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
+  const dt = new Date(0);
+  dt.setUTCFullYear(y, mo - 1, d);
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
@@ -373,11 +385,11 @@ function dateKey(d) {
  */
 function addMonths(d, n) {
   const [y, m, day] = d.split('-').map(Number);
-  const target = new Date(Date.UTC(y, m - 1 + n, 1));
-  const lastDay = new Date(
-    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)
-  ).getUTCDate();
-  target.setUTCDate(Math.min(day, lastDay));
+  const target = new Date(0);
+  target.setUTCFullYear(y, m - 1 + n, 1);
+  const end = new Date(0);
+  end.setUTCFullYear(target.getUTCFullYear(), target.getUTCMonth() + 1, 0);
+  target.setUTCDate(Math.min(day, end.getUTCDate()));
   return dateKey(target);
 }
 
@@ -410,16 +422,28 @@ function refDate(v, name) {
 }
 
 /**
- * Complete `AgeRules` from a possibly partial / missing object.
+ * Complete `AgeRules` from a possibly partial / missing object; entries that are not non‑negative
+ * finite numbers fall back to the defaults.
  * @param {unknown} rules @returns {AgeRules}
+ * @throws {ValidationError} when the bands are inconsistent (`infantMax > childMax`), which
+ *   `paxTypeForAge` could not classify (path `rules`, code `invalid_rules`)
  */
 function ageRules(rules) {
   const src = isObjectLike(rules) ? /** @type {Record<string, unknown>} */ (rules) : {};
   const out = { ...DEFAULT_AGE_RULES };
   for (const k of ['infantMax', 'childMax', 'infantPerAdult', 'maxPax']) {
-    if (isFiniteNumber(src[k])) out[k] = src[k];
+    const v = src[k];
+    if (isFiniteNumber(v) && v >= 0) out[k] = v;
   }
   if (src.refDate === 'departure' || src.refDate === 'return') out.refDate = src.refDate;
+  if (out.infantMax > out.childMax) {
+    throw programmerError(
+      `Expected age bands with infantMax <= childMax, got ${out.infantMax} > ${out.childMax}`,
+      'rules',
+      'invalid_rules',
+      { infantMax: out.infantMax, childMax: out.childMax }
+    );
+  }
   return out;
 }
 
@@ -590,7 +614,6 @@ function runRule(rule, value, parent, root, path, ctx, out) {
     return;
   }
 
-  const before = out.length;
   if (r.type !== undefined && !matchesType(value, r.type)) {
     out.push(
       issue(path, r.type === 'date' ? 'date' : 'type', { expected: r.type, actual: typeOf(value) })
@@ -598,6 +621,7 @@ function runRule(rule, value, parent, root, path, ctx, out) {
     return;
   }
 
+  const before = out.length;
   if (r.pattern !== undefined) {
     const re = toRegExp(r.pattern, path);
     const testable = typeof value === 'string' || typeof value === 'number';
@@ -625,24 +649,24 @@ function runRule(rule, value, parent, root, path, ctx, out) {
     out.push(issue(path, 'enum', { values: [...r.enum] }));
   }
 
-  if (r.items !== undefined) {
-    if (!Array.isArray(value)) {
-      out.push(issue(path, 'type', { expected: 'array', actual: typeOf(value) }));
-    } else {
-      value.forEach((item, i) =>
-        runSchema(/** @type {Schema} */ (r.items), item, value, root, `${path}[${i}]`, ctx, out)
-      );
-    }
+  const items = Array.isArray(value) ? value : null;
+  const record = isObjectLike(value) ? /** @type {Record<string, unknown>} */ (value) : null;
+  if (r.items !== undefined && !items) {
+    out.push(issue(path, 'type', { expected: 'array', actual: typeOf(value) }));
   }
-
+  if (r.props !== undefined && !record) {
+    out.push(issue(path, 'type', { expected: 'object', actual: typeOf(value) }));
+  }
+  // Only the node's own checks decide whether `custom` runs; child issues are reported alongside,
+  // so a cross-field check (date order, counts) still runs when one element is malformed.
   const ownIssues = out.length - before;
 
-  if (r.props !== undefined) {
-    if (!isObjectLike(value)) {
-      out.push(issue(path, 'type', { expected: 'object', actual: typeOf(value) }));
-      return;
-    }
-    const record = /** @type {Record<string, unknown>} */ (value);
+  if (r.items !== undefined && items) {
+    items.forEach((item, i) =>
+      runSchema(/** @type {Schema} */ (r.items), item, value, root, `${path}[${i}]`, ctx, out)
+    );
+  }
+  if (r.props !== undefined && record) {
     for (const key of Object.keys(r.props)) {
       runSchema(r.props[key], record[key], value, root, joinPath(path, key), ctx, out);
     }
@@ -692,7 +716,8 @@ function isBelow(a, b) {
  * and `props` for nested objects; a node may also be a list of rules. Issues carry a dotted `path`
  * (`slices[1].date`, `''` for the root, prefixed with `ctx.path` when given), a machine `code` and
  * the i18n key `validation.<code>` as `message`; repeated `path` + `code` pairs are collapsed.
- * Unknown object keys are ignored. Effects: none.
+ * `custom` runs once the node's own checks passed, whatever its children reported, so cross‑field
+ * checks are never hidden by a malformed element. Unknown object keys are ignored. Effects: none.
  * @param {Schema} schema
  * @param {unknown} value
  * @param {ValidationContext} [ctx]  passed to every `custom` / `when`; see `ValidationContext`
@@ -861,8 +886,9 @@ export function isLuhn(s) {
 
 /**
  * Airline name field: letters separated by single spaces, hyphens or apostrophes, no leading /
- * trailing separators, at most `maxLength` characters. `charset: 'latin'` (default) is ASCII A‑Z,
- * what ticketing systems accept; `'any'` allows every Unicode letter. Effects: none.
+ * trailing separators, at most `maxLength` characters (default 60; `Infinity` lifts the cap).
+ * `charset: 'latin'` (default) is ASCII A‑Z, what ticketing systems accept; `'any'` allows every
+ * Unicode letter. Effects: none.
  * @param {unknown} s
  * @param {{ maxLength?: number, charset?: 'latin'|'any' }} [options]
  * @returns {boolean}
@@ -872,15 +898,15 @@ export function isNameValid(s, options = {}) {
   const v = s.trim();
   if (!v) return false;
   const o = isObjectLike(options) ? options : {};
-  const maxLength = isFiniteNumber(o.maxLength) ? o.maxLength : DEFAULT_NAME_RULES.maxLength;
+  const maxLength = isPositiveNumber(o.maxLength) ? o.maxLength : DEFAULT_NAME_RULES.maxLength;
   if (v.length > maxLength) return false;
   return (o.charset === 'any' ? NAME_ANY_RE : NAME_LATIN_RE).test(v);
 }
 
 /**
  * Whether first + last name fit the ticket name field: letters only are counted (spaces, hyphens
- * and apostrophes are dropped on the ticket) plus one separator, against `max` characters. Effects:
- * none.
+ * and apostrophes are dropped on the ticket) plus one separator, against `max` characters (a
+ * non‑positive or non‑numeric `max` means the default of 60). Effects: none.
  * @param {string} first
  * @param {string} last
  * @param {number} [max=60]
@@ -888,7 +914,7 @@ export function isNameValid(s, options = {}) {
  */
 export function namesFitTicket(first, last, max = DEFAULT_TICKET_NAME_MAX) {
   if (typeof first !== 'string' || typeof last !== 'string') return false;
-  const limit = isFiniteNumber(max) ? max : DEFAULT_TICKET_NAME_MAX;
+  const limit = isPositiveNumber(max) ? max : DEFAULT_TICKET_NAME_MAX;
   const f = first.replace(NAME_FILLER_RE, '');
   const l = last.replace(NAME_FILLER_RE, '');
   return f.length + l.length + 1 <= limit;
@@ -949,6 +975,7 @@ export function documentValid(doc, travelDate, options = {}) {
  * @param {PaxCounts} pax
  * @param {AgeRules|Partial<AgeRules>} [rules]
  * @returns {ValidationIssue[]}
+ * @throws {ValidationError} when `rules.infantMax > rules.childMax`
  */
 export function paxCountsValid(pax, rules) {
   const r = ageRules(rules);
@@ -1022,7 +1049,8 @@ export function paxCountsValid(pax, rules) {
  * @param {AgeRules|Partial<AgeRules>} [rules]
  * @param {DateStr} travelDate  departure or return date, as `rules.refDate` asks
  * @returns {ValidationIssue[]}
- * @throws {ValidationError} when `travelDate` is not a `YYYY-MM-DD` date
+ * @throws {ValidationError} when `travelDate` is not a `YYYY-MM-DD` date or
+ *   `rules.infantMax > rules.childMax`
  */
 export function travelerMatchesSlot(traveler, slot, rules, travelDate) {
   const on = refDate(travelDate, 'travelDate');
@@ -1144,10 +1172,46 @@ function phoneRule(required) {
   };
 }
 
+/** Property names a backend `FieldRule.path` may never address (prototype pollution). */
+const UNSAFE_KEYS = Object.freeze(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Copy of a schema node (rule or rule list) with a `FieldRule` overlay applied at `segs`: an empty
+ * path merges `extra` into the node's first rule; otherwise the node becomes an object rule whose
+ * `props[seg]` is overlaid recursively — or, for an array rule, every element (`items`) is. With
+ * `required`, every container on the way becomes required too. Nothing in the input is mutated.
+ * @param {Schema|undefined} node @param {string[]} segs @param {Rule} extra @param {boolean} required
+ * @returns {Schema}
+ */
+function overlayRule(node, segs, extra, required) {
+  const list = Array.isArray(node) ? node : [node];
+  /** @type {Rule} */
+  const head = isObjectLike(list[0]) ? { ...list[0] } : {};
+  if (segs.length === 0) {
+    Object.assign(head, extra);
+  } else {
+    if (required) head.required = true;
+    if (head.items !== undefined || head.type === 'array') {
+      if (head.type === undefined) head.type = 'array';
+      head.items = overlayRule(head.items, segs, extra, required);
+    } else {
+      if (head.type === undefined) head.type = 'object';
+      const props = isObjectLike(head.props) ? { ...head.props } : {};
+      const [seg, ...rest] = segs;
+      const existing = Object.prototype.hasOwnProperty.call(props, seg) ? props[seg] : undefined;
+      props[seg] = overlayRule(existing, rest, extra, required);
+      head.props = props;
+    }
+  }
+  return Array.isArray(node) ? [head, ...node.slice(1)] : head;
+}
+
 /**
  * Overlay backend `FieldRule[]` (`required`, `pattern`, `options`) on a props tree; dotted paths
- * create nested object rules, and a required nested field makes its containers required too.
- * Invalid backend patterns are ignored rather than thrown.
+ * create nested object rules (a path through an array rule applies to every element; `[i]`
+ * indexes are dropped), and a required nested field makes its containers required too. Rules
+ * whose path is empty, not a string or addresses the prototype chain (`__proto__`,
+ * `constructor`, `prototype`), and unusable backend patterns, are ignored rather than thrown.
  * @param {Record<string, Schema>} props @param {unknown} fields
  */
 function applyFieldRules(props, fields) {
@@ -1155,20 +1219,11 @@ function applyFieldRules(props, fields) {
   for (const f of fields) {
     if (!isObjectLike(f) || !isNonEmptyString(/** @type {any} */ (f).path)) continue;
     const rule = /** @type {FieldRule} */ (f);
-    const segs = rule.path.split('.').filter(Boolean);
-    if (segs.length === 0) continue;
-    let target = props;
-    for (let i = 0; i < segs.length - 1; i++) {
-      const seg = segs[i];
-      const existing = target[seg];
-      /** @type {Rule} */
-      const node = Array.isArray(existing) ? { ...existing[0] } : existing ? { ...existing } : {};
-      if (node.type === undefined) node.type = 'object';
-      if (rule.required === true) node.required = true;
-      node.props = isObjectLike(node.props) ? { ...node.props } : {};
-      target[seg] = Array.isArray(existing) ? [node, ...existing.slice(1)] : node;
-      target = node.props;
-    }
+    const segs = rule.path
+      .split('.')
+      .map((s) => s.trim().replace(/\[\d*\]$/, ''))
+      .filter(Boolean);
+    if (segs.length === 0 || segs.some((s) => UNSAFE_KEYS.includes(s))) continue;
     /** @type {Rule} */
     const extra = {};
     if (typeof rule.required === 'boolean') extra.required = rule.required;
@@ -1180,12 +1235,9 @@ function applyFieldRules(props, fields) {
       }
     }
     if (Array.isArray(rule.options) && rule.options.length) extra.enum = rule.options.slice();
-    const leaf = segs[segs.length - 1];
-    const existing = target[leaf];
-    if (existing === undefined) target[leaf] = extra;
-    else if (Array.isArray(existing))
-      target[leaf] = [{ ...existing[0], ...extra }, ...existing.slice(1)];
-    else target[leaf] = { ...existing, ...extra };
+    const [first, ...rest] = segs;
+    const existing = Object.prototype.hasOwnProperty.call(props, first) ? props[first] : undefined;
+    props[first] = overlayRule(existing, rest, extra, rule.required === true);
   }
 }
 
@@ -1228,17 +1280,17 @@ function searchLimits(limits) {
  * `ctx.today`. Effects: none.
  * @param {SearchLimits} [limits]
  * @returns {Schema}
+ * @throws {ValidationError} when the age bands are inconsistent (`infantMax > childMax`)
  */
 function searchParamsSchema(limits) {
   const L = searchLimits(limits);
-  /** @type {AgeRules} */
-  const rules = {
+  const rules = ageRules({
     infantMax: L.infantMax,
     childMax: L.childMax,
     refDate: 'departure',
     infantPerAdult: L.infantPerAdult,
     maxPax: L.maxTotal,
-  };
+  });
   /** @type {Rule} */
   const slice = {
     required: true,
@@ -1402,6 +1454,7 @@ function documentSchema(rule) {
  * @param {TravelerRequirements|Partial<TravelerRequirements>} [requirements]
  * @param {PaxType} [paxType]
  * @returns {Schema}
+ * @throws {ValidationError} when `requirements.ageRules` is inconsistent (`infantMax > childMax`)
  */
 function travelerSchema(requirements, paxType) {
   const req = isObjectLike(requirements) ? /** @type {Record<string, any>} */ (requirements) : {};
@@ -1430,7 +1483,7 @@ function travelerSchema(requirements, paxType) {
     required,
     type: 'string',
     maxLength: nameMax,
-    custom: (v) => isNameValid(v, { maxLength: Infinity, charset }) || 'name',
+    custom: (v) => isNameValid(v, { maxLength: nameMax, charset }) || 'name',
   });
   /** @type {Record<string, Schema>} */
   const props = {

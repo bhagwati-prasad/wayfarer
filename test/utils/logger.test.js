@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createLogger } from '../../src/utils/logger.js';
 import { ValidationError } from '../../src/errors/index.js';
@@ -78,6 +79,15 @@ describe('createLogger / levels', () => {
     ]);
     // the failed call left the level untouched
     expect(log.level).toBe('warn');
+    // an explicit set to nothing is still a bad argument
+    expect(() => log.setLevel(null)).toThrow(ValidationError);
+    expect(() => log.setLevel(undefined)).toThrow(ValidationError);
+    expect(log.level).toBe('warn');
+  });
+
+  it('treats a nullish level option as "not given" like the other options', () => {
+    expect(createLogger({ level: null, sink: consoleSink() }).level).toBe('warn');
+    expect(createLogger({ level: undefined, sink: consoleSink() }).level).toBe('warn');
   });
 
   it('validates the other options', () => {
@@ -163,6 +173,64 @@ describe('sinks', () => {
     };
     expect(() => createLogger({ level: 'debug', sink: boom }).info('x')).not.toThrow();
     expect(() => createLogger({ level: 'debug', sink: { info: boom } }).info('x')).not.toThrow();
+    expect(() => createLogger({ level: 'debug', sink: { log: boom } }).info('x')).not.toThrow();
+    const hostile = {
+      get info() {
+        throw new TypeError('no such method');
+      },
+    };
+    expect(() => createLogger({ level: 'debug', sink: hostile }).info('x')).not.toThrow();
+  });
+
+  it('passes an explicit null data argument through (only undefined means "no data")', () => {
+    const sink = consoleSink();
+    const { sink: fn, entries } = entrySink();
+    createLogger({ level: 'debug', sink }).info('n', null);
+    createLogger({ level: 'debug', sink: fn }).info('n', null);
+    expect(sink.info.mock.calls[0]).toEqual(['n', null]);
+    expect(entries[0]).toMatchObject({ msg: 'n', data: null });
+    expect('data' in entries[0]).toBe(true);
+  });
+
+  it('never throws out of a log call, whatever the message or payload does', () => {
+    const { sink, entries } = entrySink();
+    const log = createLogger({ level: 'debug', sink });
+
+    const trap = { ok: 1 };
+    Object.defineProperty(trap, 'secret', {
+      enumerable: true,
+      get() {
+        throw new Error('should be isolated');
+      },
+    });
+    expect(() => log.error('getter', trap)).not.toThrow();
+    expect(entries.at(-1)).toMatchObject({
+      msg: 'getter',
+      data: { ok: 1, secret: '[Unreadable]' },
+    });
+
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => log.error('revoked data', proxy)).not.toThrow();
+    expect(entries.at(-1)).toMatchObject({ msg: 'revoked data', data: '[Unreadable]' });
+    expect(() => log.error('nested', { list: [proxy], ok: true })).not.toThrow();
+    expect(entries.at(-1).data).toEqual({ list: ['[Unreadable]'], ok: true });
+
+    const badString = {
+      toString() {
+        throw new Error('no string for you');
+      },
+    };
+    expect(() => log.error(badString)).not.toThrow();
+    expect(entries.at(-1)).toMatchObject({ msg: '[Unreadable]' });
+    expect(() => log.error(proxy)).not.toThrow();
+    expect(entries.at(-1)).toMatchObject({ msg: '[Unreadable]' });
+
+    // even the clock failing is not the caller's problem
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      throw new Error('no clock');
+    });
+    expect(() => log.error('no clock')).not.toThrow();
   });
 
   it('coerces non-string messages (an Error contributes its message)', () => {
@@ -209,6 +277,21 @@ describe('child', () => {
     root.warn('w');
     root.child('  http ').warn('h');
     expect(sink.warn.mock.calls).toEqual([['[wayfarer] w'], ['[wayfarer.http] h']]);
+    // a blank root scope is the same as none
+    const blank = createLogger({ level: 'debug', sink, scope: '   ' });
+    blank.info('b');
+    expect(blank.scope).toBe('');
+    expect(sink.info.mock.calls).toEqual([['b']]);
+  });
+
+  it('masks PANs in a scoped message after prefixing', () => {
+    const sink = consoleSink();
+    createLogger({ level: 'debug', sink }).child('pay').warn('card 4111 1111 1111 1111 declined');
+    createLogger({ level: 'debug', sink })
+      .child('pay')
+      .error(new Error('declined 4111111111111111'));
+    expect(sink.warn).toHaveBeenCalledWith('[pay] card **** **** **** 1111 declined');
+    expect(sink.error).toHaveBeenCalledWith('[pay] declined ************1111');
   });
 
   it('reports the scope separately to function sinks, message still prefixed', () => {
@@ -373,14 +456,52 @@ describe('redact', () => {
   });
 
   it.each([
+    ['order 20251018 4111 1111 1111 1111', 'order 20251018 **** **** **** 1111'],
+    ['ref 1234 4111 1111 1111 1111', 'ref 1234 **** **** **** 1111'],
+    ['4111 1111 1111 1111 123', '**** **** **** 1111 123'],
+    ['4111 1111 1111 1111 12', '**** **** **** 1111 12'],
+    ['4111-1111-1111-1111 exp 12-26', '****-****-****-1111 exp 12-26'],
+    ['41111111 11111111 123', '******** ****1111 123'],
+    ['3782 822463 10005', '**** ****** *0005'],
+    ['seat 12A 4111111111111111', 'seat 12A ************1111'],
+  ])('masks a PAN that shares a separated digit group with other digits: %s', (input, expected) => {
+    expect(log.redact(input)).toBe(expected);
+    expect(log.redact({ note: input })).toEqual({ note: expected });
+  });
+
+  it('masks every PAN when two share one digit group (over-masking is the safe side)', () => {
+    const out = log.redact('4111 1111 1111 1111 5555 5555 5555 4444');
+    expect(out).not.toContain('4111');
+    expect(out).not.toContain('5555');
+    expect(out).toMatch(/^[* ]+4444$/);
+  });
+
+  it.each([
     ['4111111111111112', 'Luhn-invalid'],
     ['411111111111', 'too short (12)'],
     ['41111111111111110000', 'part of a longer digit run'],
+    [
+      '12344111111111111111',
+      'PAN glued to a digit prefix without a separator (single run, 20 digits)',
+    ],
     ['1700000000000', 'Luhn-invalid 13-digit timestamp'],
+    ['12 14 16 18 20 22 24', 'separated numbers whose only 13+ window is Luhn-invalid'],
+    ['ids 1001 1002 1003 1004', 'separated ids, Luhn-invalid'],
+    ['4111  1111  1111  1111', 'double separators break the group'],
     ['PNR ABC123 flight AI 101', 'ordinary text'],
     ['', 'empty'],
   ])('leaves %s alone (%s)', (input) => {
     expect(log.redact(input)).toBe(input);
+  });
+
+  it('unboxes boxed primitives instead of spreading them one character per index', () => {
+    expect(log.redact(new String('4111111111111111'))).toBe('************1111');
+    expect(log.redact({ n: new Number(5), b: new Boolean(false), s: new String('x') })).toEqual({
+      n: 5,
+      b: false,
+      s: 'x',
+    });
+    expect(log.redact({ card: new String('4111111111111111') })).toEqual({ card: '[REDACTED]' });
   });
 
   it('passes primitives through untouched', () => {
@@ -430,6 +551,92 @@ describe('redact', () => {
     });
     expect(out.err.stack).toContain('declined ************1111');
     expect(out.err.stack).not.toContain('4111111111111111');
+  });
+
+  it('recognises errors from another realm', () => {
+    const foreign = vm.runInNewContext(
+      'const e = new Error("foreign 4111111111111111"); e.code = "X"; e.token = "t"; e'
+    );
+    expect(foreign instanceof Error).toBe(false);
+    const out = log.redact({ foreign });
+    expect(out.foreign).toMatchObject({
+      name: 'Error',
+      message: 'foreign ************1111',
+      code: 'X',
+      token: '[REDACTED]',
+    });
+    expect(out.foreign.stack).toContain('foreign ************1111');
+    expect(out.foreign.stack).not.toContain('4111111111111111');
+    // and as a message
+    const sink = consoleSink();
+    createLogger({ level: 'debug', sink }).error(foreign);
+    expect(sink.error).toHaveBeenCalledWith('foreign ************1111');
+  });
+
+  it('carries `cause` and AggregateError `errors` (non-enumerable on native errors), redacted', () => {
+    const err = new Error('outer', { cause: { token: 't', pan: '4111111111111111', ok: 1 } });
+    expect(Object.keys(err)).not.toContain('cause');
+    expect(log.redact(err)).toMatchObject({
+      name: 'Error',
+      message: 'outer',
+      cause: { token: '[REDACTED]', pan: '[REDACTED]', ok: 1 },
+    });
+
+    const chained = new Error('top', {
+      cause: new Error('mid 4111111111111111', { cause: 'leaf' }),
+    });
+    const out = log.redact(chained);
+    expect(out.cause).toMatchObject({
+      name: 'Error',
+      message: 'mid ************1111',
+      cause: 'leaf',
+    });
+
+    const loop = new Error('loop');
+    loop.cause = loop;
+    expect(log.redact(loop)).toMatchObject({ message: 'loop', cause: '[Circular]' });
+
+    const agg = new AggregateError([new Error('a 4111111111111111'), { token: 't' }], 'many');
+    expect(Object.keys(agg)).not.toContain('errors');
+    expect(log.redact(agg)).toMatchObject({
+      name: 'AggregateError',
+      message: 'many',
+      errors: [{ name: 'Error', message: 'a ************1111' }, { token: '[REDACTED]' }],
+    });
+  });
+
+  it('never throws on unreadable input; the unreadable part becomes [Unreadable]', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(log.redact(proxy)).toBe('[Unreadable]');
+    expect(log.redact([proxy, 1])).toEqual(['[Unreadable]', 1]);
+
+    const trap = { ok: 1 };
+    Object.defineProperty(trap, 'secret', {
+      enumerable: true,
+      get() {
+        throw new Error('nope');
+      },
+    });
+    expect(log.redact(trap)).toEqual({ ok: 1, secret: '[Unreadable]' });
+
+    const noKeys = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('no keys');
+        },
+      }
+    );
+    expect(log.redact({ noKeys, ok: 1 })).toEqual({ noKeys: '[Unreadable]', ok: 1 });
+
+    const fn = function named() {};
+    Object.defineProperty(fn, 'name', {
+      get() {
+        throw new Error('no name');
+      },
+    });
+    expect(log.redact({ fn })).toEqual({ fn: '[Unreadable]' });
   });
 
   it('replaces cycles with [Circular] but clones repeated non-cyclic references', () => {

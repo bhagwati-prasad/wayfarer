@@ -1,17 +1,23 @@
 /**
  * Client configuration for the Wayfarer SDK (docs/api/01-core.md §2, `ClientConfig` in
- * docs/api/00-types.md): the compiled `DEFAULTS`, `defineConfig(partial)` which deep‑merges the host's
- * partial over them, validates, normalises (`baseUrl` loses its trailing slash, `currency` is
- * upper‑cased) and deep‑freezes the result, and `validateConfig(config)` which reports every problem
- * as a `ValidationResult` without throwing. Pure and SSR‑safe: no I/O, no DOM, no timers, no
- * module‑level mutable state, no logging. Host‑owned objects (a custom `storage` adapter, the
- * `payments` port, `fetch`, plugins, telemetry adapters) are kept by reference and are never copied,
- * mutated or frozen. The only error thrown is `ConfigError` (carrying `issues[]`); never a plain
- * `Error`, and `validateConfig` never throws at all.
+ * docs/api/00-types.md): the compiled `DEFAULTS`, `defineConfig(partial)` which validates the host's
+ * partial, deep‑merges it over the defaults, validates the merged result, normalises (`baseUrl`
+ * loses its trailing slash, `currency` is upper‑cased) and deep‑freezes it, and
+ * `validateConfig(config)` which reports every problem as a `ValidationResult` without throwing.
+ * Validation is strict enough that nothing downstream rejects a defined config later: endpoint keys
+ * and templates follow `core/endpoints.js`, access rule keys follow `auth/access.js`, millisecond
+ * values fit a 32‑bit timer, and prototype‑pollution keys (`__proto__`, `constructor`, `prototype`)
+ * and cyclic message bundles are reported instead of being silently dropped or overflowing the stack.
+ * Pure and SSR‑safe: no I/O, no DOM, no timers, no module‑level mutable state, no logging.
+ * Host‑owned objects (a custom `storage` adapter, the `payments` port, `fetch`, plugins, telemetry
+ * adapters and every function) are kept by reference and are never copied, mutated or frozen; the
+ * host's partial is never mutated. The only error thrown is `ConfigError` (carrying `issues[]`);
+ * never a plain `Error`, and `validateConfig` never throws at all.
  */
 
 import { ConfigError } from '../errors/index.js';
-import { deepFreeze, deepMerge, isPlainObject } from '../utils/object.js';
+import { DEFAULT_ACCESS_POLICY } from '../auth/access.js';
+import { clone, deepFreeze, deepMerge, isPlainObject } from '../utils/object.js';
 
 /** @typedef {import('../types.js').ClientConfig} ClientConfig */
 /** @typedef {import('../types.js').AccessPolicy} AccessPolicy */
@@ -50,6 +56,10 @@ const PAYMENTS_PORT_MEMBERS = Object.freeze(['methods', 'createIntent', 'confirm
 
 /** Members every custom `StorageAdapter` must expose (docs/api/02-state-events-errors.md §4). */
 const STORAGE_ADAPTER_MEMBERS = Object.freeze(['getItem', 'setItem', 'removeItem']);
+/** Optional `StorageAdapter` members (functions when present). */
+const STORAGE_ADAPTER_OPTIONAL = Object.freeze(['keys']);
+/** Optional `TelemetryAdapter` members (functions when present; docs/api/03-utils.md §10). */
+const TELEMETRY_ADAPTER_OPTIONAL = Object.freeze(['page', 'identify', 'flush']);
 
 /**
  * Top‑level keys whose values belong to the host: they are re‑attached by reference after the merge
@@ -63,33 +73,24 @@ const LOCALE_RE = /^[a-z]{2,3}(?:-[a-z0-9]{1,8})*$/i;
 const CURRENCY_RE = /^[a-z]{3}$/i;
 /** A path segment safe to write with dot notation. */
 const PLAIN_KEY_RE = /^[A-Za-z_$][\w$]*$/;
+/** Keys `deepMerge` drops (prototype‑pollution vectors); reported instead of vanishing silently. */
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+/** Whitespace or control characters, which the WHATWG URL parser would strip or keep silently. */
+const SPACE_OR_CONTROL_RE = /[\s\p{Cc}]/u;
+/** Largest delay `setTimeout` honours; above it browsers and Node fire after ~1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+/** Endpoint / function key: `module.fn`, `module.group.fn`, … (mirrors `core/endpoints.js`). */
+const FUNCTION_KEY_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+/** Access rule key: a function key or a `module.*` / `module.group.*` wildcard (mirrors `auth/access.js`). */
+const RULE_KEY_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\.\*)?$/;
+/** Well‑formed `{name}` placeholders of an endpoint template. */
+const PLACEHOLDER_RE = /\{[A-Za-z_$][\w$]*\}/g;
+/** Any brace left once well‑formed placeholders are removed: `{bad-name}`, `{unclosed`, `}`. */
+const STRAY_BRACE_RE = /[{}]/;
+/** An endpoint template may be an absolute http(s) URL instead of a `/path`. */
+const ABSOLUTE_URL_RE = /^https?:\/\/\S+$/i;
 
 // ── defaults ────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * Default access policy (docs/api/01-core.md §1.1). Inline copy: `src/auth/access.js` does not exist
- * yet; once it does it can read this policy as `DEFAULTS.access`. Agencies override any key.
- * @type {AccessPolicy}
- */
-const DEFAULT_ACCESS_POLICY = {
-  default: 'open',
-  rules: {
-    'itinerary.*': 'guest',
-    'ancillaries.*': 'guest',
-    'booking.*': 'guest',
-    'payments.*': 'guest',
-    'alerts.createGuest': 'guest',
-    'booking.retrieve': 'guest',
-    'trips.byReference': 'guest',
-    'travelers.*': 'auth',
-    'trips.*': 'auth',
-    'account.*': 'auth',
-    'wallet.*': 'auth',
-    'alerts.*': 'auth',
-    'support.tickets.*': 'auth',
-    'payments.savedMethods.*': 'auth',
-  },
-};
 
 /**
  * Compiled defaults (docs/api/01-core.md §2). `search.resultMode` is `'per_slice'` — the **split**
@@ -220,12 +221,12 @@ function expectFunction(value, path, issues) {
 }
 
 /**
- * An integer not below `min`.
+ * An integer within `[min, max]` (`max` is unbounded when omitted).
  * @param {unknown} value @param {string} path @param {ValidationIssue[]} issues
- * @param {{ min: number }} options
+ * @param {{ min: number, max?: number }} options
  * @returns {value is number}
  */
-function expectInteger(value, path, issues, { min }) {
+function expectInteger(value, path, issues, { min, max = Infinity }) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     issues.push(
       issue(path, 'invalid_type', `${path} must be an integer`, {
@@ -241,6 +242,10 @@ function expectInteger(value, path, issues, { min }) {
   }
   if (value < min) {
     issues.push(issue(path, 'min', `${path} must be at least ${min}`, { min, received: value }));
+    return false;
+  }
+  if (value > max) {
+    issues.push(issue(path, 'max', `${path} must be at most ${max}`, { max, received: value }));
     return false;
   }
   return true;
@@ -331,23 +336,43 @@ function expectArrayOf(value, path, issues, item) {
 }
 
 /**
- * A plain object whose every value passes `item` (keys are free‑form).
- * @param {unknown} value @param {string} path @param {ValidationIssue[]} issues
- * @param {Check} item
+ * A key check for free‑form records: returns whether `key` is acceptable, pushing its own issue
+ * (at `path`, the already‑joined child path) when it is not.
+ * @typedef {(key: string, path: string, issues: ValidationIssue[]) => boolean} KeyCheck
  */
-function expectRecordOf(value, path, issues, item) {
+
+/**
+ * A plain object whose every value passes `item`. Keys are free‑form apart from the reserved
+ * prototype‑pollution vectors, which `deepMerge` would silently drop and are therefore reported as
+ * `invalid_key`; `keyCheck` may constrain them further.
+ * @param {unknown} value @param {string} path @param {ValidationIssue[]} issues
+ * @param {Check} item @param {KeyCheck} [keyCheck]
+ */
+function expectRecordOf(value, path, issues, item, keyCheck) {
   if (!expectPlainObject(value, path, issues)) return;
   for (const key of Object.keys(value)) {
-    if (value[key] !== undefined) item(value[key], join(path, key), issues);
+    const child = join(path, key);
+    if (!expectSafeKey(key, child, issues)) continue;
+    if (keyCheck && !keyCheck(key, child, issues)) continue;
+    if (value[key] !== undefined) item(value[key], child, issues);
   }
 }
 
+/** @type {KeyCheck} */
+function expectSafeKey(key, path, issues) {
+  if (!RESERVED_KEYS.has(key)) return true;
+  issues.push(issue(path, 'invalid_key', `${path} is a reserved key`, { received: key }));
+  return false;
+}
+
 /**
- * An object exposing each of `members` as a function (duck type for host‑provided objects).
+ * An object exposing each of `members` as a function (duck type for host‑provided objects); each of
+ * `optional` must be a function too when present.
  * @param {unknown} value @param {string} path @param {ValidationIssue[]} issues
  * @param {readonly string[]} members @param {string} kind
+ * @param {readonly string[]} [optional]
  */
-function expectDuckType(value, path, issues, members, kind) {
+function expectDuckType(value, path, issues, members, kind, optional = []) {
   if (!isObjectLike(value)) {
     issues.push(
       issue(path, 'invalid_type', `${path} must be a ${kind}`, {
@@ -372,16 +397,25 @@ function expectDuckType(value, path, issues, members, kind) {
       );
     }
   }
+  for (const member of optional) {
+    if (value[member] !== undefined) expectFunction(value[member], join(path, member), issues);
+  }
 }
 
 // ── specific checks ─────────────────────────────────────────────────────────────────────────────
 
-/** @type {Check} */
+/**
+ * `baseUrl`: an absolute http(s) URL. The checks go beyond `new URL()`, which silently strips tabs
+ * and newlines and accepts a bare `?` / `#` — all of which would survive into the normalised base
+ * URL (`defineConfig` only trims and drops trailing slashes) and corrupt every path appended to it.
+ * @type {Check}
+ */
 function checkBaseUrl(value, path, issues) {
   if (!expectString(value, path, issues, { nonEmpty: true })) return;
+  const trimmed = value.trim();
   let url;
   try {
-    url = new URL(value.trim());
+    url = new URL(trimmed);
   } catch {
     issues.push(
       issue(path, 'invalid_url', `${path} must be an absolute http(s) URL`, { received: value })
@@ -396,13 +430,108 @@ function checkBaseUrl(value, path, issues) {
     );
     return;
   }
-  if (url.search || url.hash) {
+  if (SPACE_OR_CONTROL_RE.test(trimmed)) {
+    issues.push(
+      issue(path, 'invalid_url', `${path} must not contain whitespace or control characters`, {
+        received: value,
+      })
+    );
+    return;
+  }
+  if (/[?#]/.test(trimmed)) {
     issues.push(
       issue(path, 'invalid_url', `${path} must not contain a query string or fragment`, {
         received: value,
       })
     );
   }
+}
+
+/**
+ * An `endpoints` override key, as `createEndpoints` accepts it (`module.fn`, `module.group.fn`).
+ * @type {KeyCheck}
+ */
+function checkEndpointKey(key, path, issues) {
+  if (FUNCTION_KEY_RE.test(key)) return true;
+  issues.push(
+    issue(path, 'invalid_format', `${path} must be an endpoint key such as 'search.create'`, {
+      received: key,
+    })
+  );
+  return false;
+}
+
+/**
+ * An `endpoints` override template, as `createEndpoints` accepts it: a `/path` or absolute http(s)
+ * URL without whitespace whose placeholders are well‑formed `{name}`s (surrounding whitespace is
+ * tolerated; `createEndpoints` trims it).
+ * @type {Check}
+ */
+function checkEndpointTemplate(value, path, issues) {
+  if (!expectString(value, path, issues, { nonEmpty: true })) return;
+  const template = value.trim();
+  let problem;
+  if (/\s/.test(template)) {
+    problem = 'must not contain whitespace';
+  } else if (!template.startsWith('/') && !ABSOLUTE_URL_RE.test(template)) {
+    problem = "must start with '/' or be an absolute http(s) URL";
+  } else if (STRAY_BRACE_RE.test(template.replace(PLACEHOLDER_RE, ''))) {
+    problem = "has a malformed placeholder (expected '{name}')";
+  }
+  if (problem)
+    issues.push(issue(path, 'invalid_format', `${path} ${problem}`, { received: value }));
+}
+
+/**
+ * An `access.rules` key, as `createAccess` accepts it: a function key or a `….*` wildcard with no
+ * reserved segment (`'booking.create'`, `'booking.*'`, `'trips.changes.*'`).
+ * @type {KeyCheck}
+ */
+function checkAccessRuleKey(key, path, issues) {
+  if (RULE_KEY_RE.test(key) && !key.split('.').some((segment) => RESERVED_KEYS.has(segment))) {
+    return true;
+  }
+  issues.push(
+    issue(
+      path,
+      'invalid_format',
+      `${path} must be a function key such as 'booking.create' or a wildcard such as 'booking.*'`,
+      { received: key }
+    )
+  );
+  return false;
+}
+
+/**
+ * `i18n.messages`: a tree of plain objects (bundles) whose leaves the host's formatter understands.
+ * Reserved keys are reported at any depth, and a plain object that refers back to one of its own
+ * ancestors is reported as `cyclic` — `deepMerge` would otherwise recurse without end. A sub‑tree
+ * shared between two bundles is not a cycle and is accepted.
+ * @type {Check}
+ */
+function checkMessages(value, path, issues) {
+  if (!expectPlainObject(value, path, issues)) return;
+  walkMessages(value, path, issues, new Set());
+}
+
+/**
+ * @param {Record<string, unknown>} node @param {string} path @param {ValidationIssue[]} issues
+ * @param {Set<object>} ancestors plain objects on the current descent, `node` included on return
+ */
+function walkMessages(node, path, issues, ancestors) {
+  ancestors.add(node);
+  for (const key of Object.keys(node)) {
+    const child = join(path, key);
+    if (!expectSafeKey(key, child, issues)) continue;
+    const value = node[key];
+    if (!isPlainObject(value)) continue;
+    if (ancestors.has(value)) {
+      issues.push(issue(child, 'cyclic', `${child} refers back to one of its ancestors`));
+      continue;
+    }
+    walkMessages(value, child, issues, ancestors);
+  }
+  ancestors.delete(node);
 }
 
 /** @type {Check} */
@@ -445,7 +574,8 @@ function checkStorage(value, path, issues) {
     path,
     issues,
     STORAGE_ADAPTER_MEMBERS,
-    'storage driver name or StorageAdapter'
+    'storage driver name or StorageAdapter',
+    STORAGE_ADAPTER_OPTIONAL
   );
 }
 
@@ -499,6 +629,9 @@ function checkTelemetryAdapter(value, path, issues) {
   }
   expectString(value.name, join(path, 'name'), issues, { nonEmpty: true });
   expectFunction(value.track, join(path, 'track'), issues);
+  for (const member of TELEMETRY_ADAPTER_OPTIONAL) {
+    if (value[member] !== undefined) expectFunction(value[member], join(path, member), issues);
+  }
 }
 
 /** @type {Check} */
@@ -535,20 +668,26 @@ function checkPayments(value, path, issues) {
   expectDuckType(value, path, issues, PAYMENTS_PORT_MEMBERS, 'PaymentsPort');
 }
 
-const nonNegativeInt = /** @type {Check} */ (v, p, i) => expectInteger(v, p, i, { min: 0 });
-const positiveInt = /** @type {Check} */ (v, p, i) => expectInteger(v, p, i, { min: 1 });
-const nonEmptyString = /** @type {Check} */ (v, p, i) => expectString(v, p, i, { nonEmpty: true });
-const anyString = /** @type {Check} */ (v, p, i) => expectString(v, p, i);
+/** @type {Check} */
+const nonNegativeInt = (v, p, i) => expectInteger(v, p, i, { min: 0 });
+/** A millisecond delay `setTimeout` can honour (`0` allowed: "disabled" for `timeoutMs`). @type {Check} */
+const timerMs = (v, p, i) => expectInteger(v, p, i, { min: 0, max: MAX_TIMER_MS });
+/** A strictly positive millisecond delay `setTimeout` can honour. @type {Check} */
+const positiveTimerMs = (v, p, i) => expectInteger(v, p, i, { min: 1, max: MAX_TIMER_MS });
+/** @type {Check} */
+const nonEmptyString = (v, p, i) => expectString(v, p, i, { nonEmpty: true });
+/** @type {Check} */
+const anyString = (v, p, i) => expectString(v, p, i);
 
 /** One `Check` per `ClientConfig` key; unknown top‑level keys are reported as `unknown_key`. */
 const CHECKS = Object.freeze(
   /** @type {Record<string, Check>} */ ({
     baseUrl: checkBaseUrl,
-    endpoints: (v, p, i) => expectRecordOf(v, p, i, nonEmptyString),
+    endpoints: (v, p, i) => expectRecordOf(v, p, i, checkEndpointTemplate, checkEndpointKey),
     access: (v, p, i) =>
       expectShape(v, p, i, {
         default: checkAccessLevel,
-        rules: (rv, rp, ri) => expectRecordOf(rv, rp, ri, checkAccessLevel),
+        rules: (rv, rp, ri) => expectRecordOf(rv, rp, ri, checkAccessLevel, checkAccessRuleKey),
       }),
     errorFormat: (v, p, i) => expectEnum(v, p, i, ERROR_FORMATS),
     apiKey: nonEmptyString,
@@ -557,14 +696,14 @@ const CHECKS = Object.freeze(
     currency: checkCurrency,
     market: nonEmptyString,
     fetch: expectFunction,
-    timeoutMs: nonNegativeInt,
+    timeoutMs: timerMs,
     retries: nonNegativeInt,
     auth: (v, p, i) =>
       expectShape(v, p, i, {
         strategy: (sv, sp, si) => expectEnum(sv, sp, si, AUTH_STRATEGIES),
         refreshPath: nonEmptyString,
         tokenStorage: (sv, sp, si) => expectEnum(sv, sp, si, TOKEN_STORAGES),
-        autoRefreshSkewMs: nonNegativeInt,
+        autoRefreshSkewMs: timerMs,
         guest: expectBoolean,
       }),
     storage: checkStorage,
@@ -580,8 +719,8 @@ const CHECKS = Object.freeze(
     search: (v, p, i) =>
       expectShape(v, p, i, {
         mode: (sv, sp, si) => expectEnum(sv, sp, si, SEARCH_MODES),
-        pollIntervalMs: positiveInt,
-        maxPollMs: positiveInt,
+        pollIntervalMs: positiveTimerMs,
+        maxPollMs: positiveTimerMs,
         resultMode: (sv, sp, si) => expectEnum(sv, sp, si, RESULT_MODES),
       }),
     payments: checkPayments,
@@ -592,7 +731,7 @@ const CHECKS = Object.freeze(
         sampleRate: checkSampleRate,
       }),
     features: (v, p, i) => expectRecordOf(v, p, i, checkFeatureValue),
-    i18n: (v, p, i) => expectShape(v, p, i, { messages: expectPlainObject, fallback: checkLocale }),
+    i18n: (v, p, i) => expectShape(v, p, i, { messages: checkMessages, fallback: checkLocale }),
     logger: (v, p, i) =>
       expectShape(v, p, i, {
         level: (lv, lp, li) => expectEnum(lv, lp, li, LOG_LEVELS),
@@ -610,11 +749,15 @@ const CHECKS = Object.freeze(
 /**
  * Validate a (partial or complete) client configuration against `ClientConfig`: types, enumerations
  * (`auth.strategy`, `search.mode`, `search.resultMode`, `access` levels, `logger.level`, …),
- * `baseUrl` as an absolute http(s) URL (a trailing slash is allowed; `defineConfig` strips it),
- * non‑negative integer `timeoutMs` / `retries`, BCP‑47‑ish `locale`, 3‑letter `currency`, `storage`
- * as a driver name or `StorageAdapter` duck type, `payments` as a `PaymentsPort` duck type, and
- * unknown keys. Absent (`undefined`) keys are fine — defaults fill them; `null` is reported.
- * Never throws. Effects: none.
+ * `baseUrl` as an absolute http(s) URL without query, fragment or whitespace (a trailing slash is
+ * allowed; `defineConfig` strips it), integer `timeoutMs` / `retries` (millisecond values are
+ * non‑negative and fit a 32‑bit timer), BCP‑47‑ish `locale`, 3‑letter `currency`, `storage` as a
+ * driver name or `StorageAdapter` duck type, `payments` as a `PaymentsPort` duck type, `endpoints`
+ * keys and templates as `createEndpoints` accepts them, `access.rules` keys as `createAccess` accepts
+ * them, an acyclic `i18n.messages` tree, unknown keys (`unknown_key`) and the reserved keys
+ * `__proto__` / `constructor` / `prototype` (`invalid_key`). Absent (`undefined`) keys are fine —
+ * defaults fill them; `null` is reported. Issues follow the input's key order. Never throws.
+ * Effects: none.
  * @param {unknown} config
  * @returns {ValidationResult}
  */
@@ -646,34 +789,40 @@ export function validateConfig(config) {
 }
 
 /**
- * Build the effective client configuration: deep‑merge `partial` over `DEFAULTS` (nested objects
- * merge, arrays replace, `undefined` keeps the default), validate with `validateConfig`, normalise
- * (`baseUrl` trimmed and stripped of trailing slashes, `currency` upper‑cased) and deep‑freeze.
- * Host‑owned values — a custom `storage` adapter, the `payments` port, `fetch`, plugin objects and
- * telemetry adapters — keep their identity and are not frozen. Idempotent: a defined config can be
- * passed back in. Effects: none.
- * @param {Partial<ClientConfig>} [partial]
+ * Build the effective client configuration: validate `partial` with `validateConfig` (so every
+ * issue points at what the host actually passed and nothing it passed is silently dropped),
+ * deep‑merge it over `DEFAULTS` (nested objects merge, arrays replace, `undefined` keeps the
+ * default), validate the merged result, normalise (`baseUrl` trimmed and stripped of trailing
+ * slashes, `currency` upper‑cased) and deep‑freeze. Host‑owned values — a custom `storage` adapter,
+ * the `payments` port, `fetch`, plugin objects, telemetry adapters and every function — keep their
+ * identity and are not frozen; `i18n.messages` is deep‑cloned so the freeze never reaches an object
+ * the host still holds. Idempotent: a defined config can be passed back in. Effects: none.
+ * @param {Partial<ClientConfig>|null} [partial]
  * @returns {Readonly<ClientConfig>}
- * @throws {ConfigError} with `issues: ValidationIssue[]` when the merged configuration is invalid
+ * @throws {ConfigError} with `issues: ValidationIssue[]` when the configuration is invalid
  */
 export function defineConfig(partial = {}) {
   const input = partial === null || partial === undefined ? {} : partial;
-  if (!isPlainObject(input)) {
-    throw configError(validateConfig(input).issues);
-  }
+  const given = validateConfig(input);
+  if (!given.valid) throw configError(given.issues);
+  // `input` is a plain object now (anything else fails validation above).
+  const source = /** @type {Record<string, unknown>} */ (input);
+
   // Host-owned values are kept out of the merge (deepMerge would copy a plain adapter object) and
   // re-attached by reference afterwards.
   /** @type {Record<string, unknown>} */
   const mergeable = {};
-  for (const key of Object.keys(input)) {
-    if (!HOST_OWNED_KEYS.includes(key)) mergeable[key] = input[key];
+  for (const key of Object.keys(source)) {
+    if (HOST_OWNED_KEYS.includes(key)) continue;
+    mergeable[key] = key === 'i18n' ? cloneI18n(source[key]) : source[key];
   }
-  const merged = /** @type {Record<string, unknown>} */ (deepMerge(DEFAULTS, mergeable));
+  const merged = deepMerge(DEFAULTS, mergeable);
   for (const key of HOST_OWNED_KEYS) {
-    if (input[key] !== undefined) merged[key] = input[key];
+    if (source[key] !== undefined) merged[key] = source[key];
   }
-  const { valid, issues } = validateConfig(merged);
-  if (!valid) throw configError(issues);
+  // A valid partial merges into a valid config; this guards the defaults themselves and the merge.
+  const effective = validateConfig(merged);
+  if (!effective.valid) throw configError(effective.issues);
 
   merged.baseUrl = normaliseBaseUrl(/** @type {string} */ (merged.baseUrl));
   if (typeof merged.currency === 'string') merged.currency = merged.currency.toUpperCase();
@@ -681,6 +830,19 @@ export function defineConfig(partial = {}) {
 }
 
 // ── internals ───────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The host's `i18n` block with `messages` deep‑cloned. `deepMerge` copies nested plain objects but
+ * shares array items with its source, so without the clone `freezeConfig` would freeze bundle
+ * entries (objects inside arrays) that the host still owns. Validation has passed, so `i18n` is a
+ * plain object or `undefined`; the host's object is not touched.
+ * @param {unknown} i18n
+ * @returns {unknown}
+ */
+function cloneI18n(i18n) {
+  if (!isPlainObject(i18n) || i18n.messages === undefined) return i18n;
+  return { ...i18n, messages: clone(i18n.messages) };
+}
 
 /**
  * Trim and drop every trailing slash (`https://api.ota.com/` → `https://api.ota.com`).

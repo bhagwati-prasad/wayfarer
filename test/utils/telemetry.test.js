@@ -258,6 +258,43 @@ describe('telemetry.track', () => {
     expect(t.context).toEqual({ market: 'IN' });
   });
 
+  it('hands every adapter its own copy: a mutating sink cannot affect the next one or the bus', () => {
+    const vandal = adapter('vandal');
+    vandal.track.mockImplementation((_event, props) => {
+      delete props.email;
+      props.items[0].item_id = 'hacked';
+      props.app.name = 'hacked';
+    });
+    const witness = adapter('witness');
+    const { telemetry, tracked } = rig({ context: { app: { name: 'web' } } });
+    telemetry.addAdapter(vandal);
+    telemetry.addAdapter(witness);
+    const input = { email: 'a@b.c', items: [{ item_id: 'of_1' }] };
+    expect(telemetry.track('x', input)).toBe(true);
+    const expected = { app: { name: 'web' }, email: 'a@b.c', items: [{ item_id: 'of_1' }] };
+    expect(vandal.track).toHaveBeenCalledTimes(1);
+    expect(witness.track).toHaveBeenCalledWith('x', expected);
+    expect(tracked[0].props).toEqual(expected);
+    expect(input).toEqual({ email: 'a@b.c', items: [{ item_id: 'of_1' }] });
+    expect(telemetry.context).toEqual({ app: { name: 'web' } });
+  });
+
+  it('never pollutes prototypes through __proto__ / constructor keys in props or context', () => {
+    const a = adapter();
+    const t = createTelemetry({ adapters: [a] });
+    const hostile = JSON.parse(
+      '{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"ok":1}'
+    );
+    expect(t.track('x', hostile)).toBe(true);
+    expect('polluted' in {}).toBe(false);
+    expect(a.track).toHaveBeenCalledWith('x', { ok: 1 });
+    expect(Object.getPrototypeOf(a.track.mock.calls[0][1])).toBe(Object.prototype);
+    t.setContext(JSON.parse('{"__proto__":{"polluted":true},"market":"IN"}'));
+    expect('polluted' in {}).toBe(false);
+    expect(t.context).toEqual({ market: 'IN' });
+    expect(Object.getPrototypeOf(t.context)).toBe(Object.prototype);
+  });
+
   it.each([
     ['', 'event'],
     ['   ', 'event'],
@@ -320,6 +357,18 @@ describe('telemetry.identify', () => {
     expect(tracked[0]).toMatchObject({ kind: 'identify', event: '42', props: { plan: 'gold' } });
     telemetry.identify('u_1');
     expect(a.identify).toHaveBeenLastCalledWith('u_1', {});
+  });
+
+  it('hands adapters a detached copy of the traits', () => {
+    const { telemetry, a } = rig();
+    const traits = { plan: 'gold', groups: [{ id: 1 }] };
+    telemetry.identify('u_1', traits);
+    const received = a.identify.mock.calls[0][1];
+    expect(received).toEqual(traits);
+    expect(received).not.toBe(traits);
+    received.groups[0].id = 2;
+    received.plan = 'hacked';
+    expect(traits).toEqual({ plan: 'gold', groups: [{ id: 1 }] });
   });
 
   it('validates its arguments', () => {
@@ -473,6 +522,27 @@ describe('telemetry.setContext', () => {
     });
   });
 
+  it("never aliases the caller's context or partial, even through arrays of objects", () => {
+    const a = adapter();
+    const initial = { tags: [{ k: 'a' }], app: { name: 'web' } };
+    const t = createTelemetry({ adapters: [a], context: initial });
+    initial.tags[0].k = 'mutated';
+    initial.app.name = 'mutated';
+    expect(t.context).toEqual({ tags: [{ k: 'a' }], app: { name: 'web' } });
+    const partial = { extra: [{ n: 1 }] };
+    t.setContext(partial);
+    partial.extra[0].n = 2;
+    expect(t.context.extra).toEqual([{ n: 1 }]);
+    t.track('x');
+    const received = a.track.mock.calls[0][1];
+    received.tags[0].k = 'hacked';
+    received.extra[0].n = 99;
+    expect(t.context).toEqual({ tags: [{ k: 'a' }], app: { name: 'web' }, extra: [{ n: 1 }] });
+    const copy = t.context;
+    copy.tags[0].k = 'copy';
+    expect(t.context.tags[0].k).toBe('a');
+  });
+
   it('rejects anything but a plain object', () => {
     const t = createTelemetry();
     for (const bad of [undefined, null, 'ctx', [], 1]) {
@@ -539,6 +609,22 @@ describe('telemetry.addAdapter', () => {
     expect(b.track).toHaveBeenCalledTimes(1);
     t.track('y');
     expect(b.track).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves an adapter that tracks from inside track() re-entrantly, in a stable order', () => {
+    const t = createTelemetry();
+    const seen = [];
+    const nested = adapter('nested');
+    nested.track.mockImplementation((event) => {
+      seen.push(`nested:${event}`);
+      if (event === 'outer') expect(t.track('inner')).toBe(true);
+    });
+    const other = adapter('other');
+    other.track.mockImplementation((event) => seen.push(`other:${event}`));
+    t.addAdapter(nested);
+    t.addAdapter(other);
+    expect(t.track('outer')).toBe(true);
+    expect(seen).toEqual(['nested:outer', 'nested:inner', 'other:inner', 'other:outer']);
   });
 });
 
@@ -948,6 +1034,29 @@ describe('bindDomainEvents', () => {
     expect(() => events.emit('itinerary:created', { itinerary: itinerary() })).not.toThrow();
     expect(errors).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a payload the mapper cannot read still counts as the commerce event, never as an error event', () => {
+    const { events, a } = bound();
+    const errors = vi.fn();
+    events.on('error', errors);
+    const unreadable = {
+      id: 'of_x',
+      slices: [],
+      price: { perPax: { amount: Symbol('not a number'), currency: 'INR' } },
+    };
+    expect(() =>
+      events.emit('search:complete', { session: { id: 'ss_x', offers: [unreadable] } })
+    ).not.toThrow();
+    expect(lastTrack(a)).toEqual(['view_item_list', {}]);
+    expect(() =>
+      events.emit('booking:ticketed', {
+        booking: booking({ itinerary: itinerary({ offers: [unreadable] }) }),
+      })
+    ).not.toThrow();
+    expect(lastTrack(a)).toEqual(['purchase', {}]);
+    expect(errors).not.toHaveBeenCalled();
+    expect(a.track).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to events.off() when on() returns nothing, and tolerates a cleared emitter', () => {

@@ -5,6 +5,8 @@
  * when the browser driver throws or fails its probe (private mode, quota, SSR), reporting it once
  * through `onUnavailable` and the `storage:unavailable` event. Values are stored as `{ v, e? }`
  * envelopes (`e` = expiry epoch ms); expired entries read as `undefined` and are deleted on read.
+ * `subscribe` relays the window `storage` event (changes made by other tabs) for web storage drivers
+ * only, and only while that driver is the active one — the memory driver cannot observe other tabs.
  * SSR‑safe: `window`, `document`, `localStorage` and `sessionStorage` are only looked up at call time
  * through `globalThis`, never at import time; no module‑level mutable state; no timers; no logging.
  * Errors are `ConfigError` / `ValidationError` / `StorageError` from `../errors/index.js` — driver
@@ -37,8 +39,8 @@ import { ConfigError, StorageError, ValidationError, isSdkError, wrap } from '..
 
 /**
  * @typedef {Object} StorageOptions
- * @property {'memory'|'local'|'session'|'cookie'|StorageAdapter} [driver='memory']
- *   Built‑in driver name or a custom adapter.
+ * @property {'memory'|'local'|'session'|'cookie'|StorageAdapter|Storage} [driver='memory']
+ *   Built‑in driver name, a custom adapter, or a DOM `Storage` area (wrapped with `webStorageDriver`).
  * @property {string} [namespace='wf']  Prefix for every key (`<namespace>:<key>`); `''` disables it.
  * @property {StorageSerializer} [serializer]  Defaults to JSON.
  * @property {number} [defaultTtlMs]  TTL applied when `set` is called without `ttlMs`; `0` = none.
@@ -54,18 +56,30 @@ import { ConfigError, StorageError, ValidationError, isSdkError, wrap } from '..
  */
 
 /**
+ * One `subscribe` registration. A distinct object per call, so the same function can subscribe
+ * twice and each `off()` removes only its own registration.
+ * @typedef {{ fn: StorageChangeListener }} Subscription
+ */
+
+/**
  * The facade returned by `createStorage`.
  * @typedef {Object} StorageFacade
  * @property {<T = unknown>(key: string) => T | undefined} get  Expired entries read as `undefined` and are deleted.
- * @property {(key: string, value: unknown, options?: { ttlMs?: number }) => void} set  `undefined` removes the key.
+ * @property {(key: string, value: unknown, options?: { ttlMs?: number }) => void} set
+ *   `undefined` removes the key; `ttlMs: 0` (or `null`) overrides `defaultTtlMs` with "no expiry".
  * @property {(key: string) => void} remove
- * @property {(key: string) => boolean} has  `false` for missing or expired entries.
- * @property {(prefix?: string) => string[]} keys  Un‑namespaced keys, optionally filtered by prefix.
+ * @property {(key: string) => boolean} has  `false` for missing or expired entries (expired ones are deleted).
+ * @property {(prefix?: string) => string[]} keys
+ *   Un‑namespaced keys, optionally filtered by prefix. A raw listing (no reads, no writes): an entry
+ *   that expired but has not been read since is still listed until `get` / `has` / `clear` drops it.
  * @property {(prefix?: string) => void} clear  Removes every namespaced key (optionally by prefix); never touches foreign keys.
  * @property {() => boolean} isAvailable  `true` while the configured driver is in use (no fallback happened).
  * @property {string} driverName  Name of the driver currently in use (`'memory'` after a fallback).
  * @property {(key: string, fn: StorageChangeListener) => () => void} subscribe
- *   Cross‑tab notifications through the window `storage` event; a no‑op off() when there is no window.
+ *   Cross‑tab notifications through the window `storage` event, for web storage drivers (`'local'`,
+ *   `'session'`, `webStorageDriver`). Same‑tab writes never fire (browser semantics). With no window,
+ *   with any other driver, or after a fallback to memory the returned `off()` is a no‑op and `fn`
+ *   never runs; a fallback also releases every existing subscription.
  * @property {() => void} destroy  Removes every subscription and the window listener (data is kept).
  */
 
@@ -75,7 +89,9 @@ import { ConfigError, StorageError, ValidationError, isSdkError, wrap } from '..
  * @property {boolean} [secure]  `Secure` attribute (forced on for `sameSite: 'none'`).
  * @property {'lax'|'strict'|'none'|'Lax'|'Strict'|'None'} [sameSite]  `SameSite=` attribute.
  * @property {string} [path='/']  `Path=` attribute.
- * @property {number} [maxAgeSec]  `Max-Age=` in seconds; omitted = session cookie.
+ * @property {number} [maxAgeSec]
+ *   `Max-Age=` in seconds (positive; fractions round up so a cookie never dies early); omitted =
+ *   session cookie.
  */
 
 const DEFAULT_NAMESPACE = 'wf';
@@ -126,6 +142,17 @@ function isAdapter(value) {
     typeof a.setItem === 'function' &&
     typeof a.removeItem === 'function'
   );
+}
+
+/**
+ * True when an adapter‑shaped value is a DOM `Storage` area (`key(i)` + `length`), such as
+ * `localStorage` handed over directly as `driver`.
+ * @param {StorageAdapter} value
+ * @returns {boolean}
+ */
+function isStorageArea(value) {
+  const a = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (value));
+  return typeof a.key === 'function' && typeof a.length === 'number';
 }
 
 /**
@@ -239,7 +266,7 @@ export function webStorageDriver(area) {
  * `sameSite`, `path` and `maxAgeSec` are written as cookie attributes on every write and removal.
  * Writes are verified by reading back, so a rejected cookie (size, `Secure` on http) throws
  * `StorageError` and lets `createStorage` fall back. Without a `document` (SSR) every operation throws
- * `StorageError`.
+ * `StorageError`. Invalid options throw `ConfigError` at construction.
  * @param {CookieDriverOptions} [options]
  * @returns {StorageAdapter}
  */
@@ -256,11 +283,17 @@ export function cookieDriver(options = {}) {
     sameSite = s.charAt(0).toUpperCase() + s.slice(1);
   }
   const secure = options && options.secure === true ? true : sameSite === 'None';
-  if (maxAgeSec != null && !(typeof maxAgeSec === 'number' && Number.isFinite(maxAgeSec))) {
-    throw new ConfigError('cookieDriver: maxAgeSec must be a finite number', {
+  if (
+    maxAgeSec != null &&
+    !(typeof maxAgeSec === 'number' && Number.isFinite(maxAgeSec) && maxAgeSec > 0)
+  ) {
+    // `Max-Age=0` (or negative) deletes the cookie on write: the read-back check would then fail and
+    // the facade would silently fall back to memory, so reject it here instead.
+    throw new ConfigError('cookieDriver: maxAgeSec must be a positive finite number of seconds', {
       details: { maxAgeSec },
     });
   }
+  const maxAgeAttr = maxAgeSec != null ? `Max-Age=${Math.ceil(maxAgeSec)}` : undefined;
 
   /** @returns {Document} */
   const doc = () => {
@@ -316,7 +349,7 @@ export function cookieDriver(options = {}) {
     setItem: (key, value) => {
       const d = doc();
       const str = String(value);
-      const extra = maxAgeSec != null ? [`Max-Age=${Math.floor(maxAgeSec)}`] : [];
+      const extra = maxAgeAttr ? [maxAgeAttr] : [];
       d.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(str)}; ${attrs(extra)}`;
       if (parse().get(key) !== str) {
         throw new StorageError('Cookie write was rejected by the browser', {
@@ -336,7 +369,9 @@ export function cookieDriver(options = {}) {
 
 /**
  * Resolves the `driver` option into an adapter. Built‑in names look their area up lazily (call
- * time, never import time); custom adapters are validated as the `StorageAdapter` duck type.
+ * time, never import time); a DOM `Storage` area is wrapped with `webStorageDriver` (so key
+ * enumeration and cross‑tab events work); other custom adapters are validated as the
+ * `StorageAdapter` duck type.
  * @param {StorageOptions['driver']} driver
  * @returns {StorageAdapter & { area?: Storage }}
  */
@@ -347,6 +382,9 @@ function resolveDriver(driver) {
   if (driver === 'cookie') return cookieDriver();
   if (isAdapter(driver)) {
     if (typeof driver.name === 'string' && driver.name) return driver;
+    if (isStorageArea(driver)) {
+      return webStorageDriver(/** @type {Storage} */ (/** @type {unknown} */ (driver)));
+    }
     /** @type {StorageAdapter} */
     const named = {
       name: 'custom',
@@ -393,9 +431,13 @@ export function createStorage(options = {}) {
   if (opts.onUnavailable !== undefined && typeof opts.onUnavailable !== 'function') {
     throw new ConfigError('createStorage: onUnavailable must be a function');
   }
-  const now = typeof opts.now === 'function' ? opts.now : Date.now;
+  if (opts.now !== undefined && typeof opts.now !== 'function') {
+    throw new ConfigError('createStorage: now must be a function returning milliseconds');
+  }
+  const now = opts.now || Date.now;
   const events = opts.events && typeof opts.events.emit === 'function' ? opts.events : undefined;
   const prefix = namespace ? `${namespace}${SEPARATOR}` : '';
+  const probeKey = prefix + PROBE_KEY;
 
   const requested = resolveDriver(opts.driver);
   /** @type {StorageAdapter & { area?: Storage }} */
@@ -403,7 +445,7 @@ export function createStorage(options = {}) {
   let available = true;
   /** Keys written through this facade, for drivers without `keys()`. @type {Set<string>} */
   const known = new Set();
-  /** @type {Map<string, Set<StorageChangeListener>>} */
+  /** @type {Map<string, Set<Subscription>>} */
   const subscribers = new Map();
   /** @type {any} */
   let listeningWindow = null;
@@ -425,6 +467,9 @@ export function createStorage(options = {}) {
       // best effort: whatever could be read survives the switch
     }
     active = memory;
+    // Memory cannot observe other tabs: the old driver's cross-tab subscriptions are released.
+    subscribers.clear();
+    stopListening();
     /** @type {StorageUnavailableInfo} */
     const info = { driver: requested.name, fallback: 'memory' };
     if (typeof opts.onUnavailable === 'function') {
@@ -471,13 +516,15 @@ export function createStorage(options = {}) {
   }
 
   /**
-   * Raw (namespaced) keys of a driver: its own `keys()` or the facade's bookkeeping.
+   * Raw (namespaced) keys of a driver: its own `keys()` (any iterable is accepted) or the facade's
+   * bookkeeping. The probe key is never listed, even when a failed probe could not clean it up.
    * @param {StorageAdapter} driver
    * @returns {string[]}
    */
   function rawKeys(driver) {
-    const list = typeof driver.keys === 'function' ? driver.keys() : Array.from(known);
-    return list.filter((k) => typeof k === 'string' && k.startsWith(prefix));
+    const list =
+      typeof driver.keys === 'function' ? Array.from(driver.keys() ?? []) : Array.from(known);
+    return list.filter((k) => typeof k === 'string' && k.startsWith(prefix) && k !== probeKey);
   }
 
   // ── envelopes ──
@@ -551,7 +598,8 @@ export function createStorage(options = {}) {
     withDriver((d) => {
       d.setItem(k, raw);
     }, undefined);
-    known.add(k);
+    // Bookkeeping is only needed for drivers that cannot enumerate their own keys.
+    if (typeof active.keys !== 'function') known.add(k);
   }
 
   /** @param {string} k namespaced key */
@@ -595,11 +643,16 @@ export function createStorage(options = {}) {
 
   // ── cross-tab subscriptions ──
 
-  /** @param {any} event the window `storage` event */
+  /**
+   * Shared window `storage` listener. Only events for the active web storage area are relayed
+   * (an event without `storageArea`, as some polyfills send, is accepted).
+   * @param {any} event the window `storage` event
+   */
   function onStorageEvent(event) {
-    if (!event) return;
-    if (event.storageArea && active.area && event.storageArea !== active.area) return;
+    if (!event || !active.area) return;
+    if (event.storageArea && event.storageArea !== active.area) return;
     if (event.key == null) {
+      // `clear()` in another tab: every subscriber hears "gone".
       for (const [k, set] of subscribers) notify(set, undefined, undefined, strip(k));
       return;
     }
@@ -616,11 +669,11 @@ export function createStorage(options = {}) {
   }
 
   /**
-   * @param {Set<StorageChangeListener>} set
+   * @param {Set<Subscription>} set
    * @param {unknown} value @param {unknown} previous @param {string} key
    */
   function notify(set, value, previous, key) {
-    for (const fn of Array.from(set)) {
+    for (const { fn } of Array.from(set)) {
       try {
         fn(value, previous, key);
       } catch (e) {
@@ -635,6 +688,7 @@ export function createStorage(options = {}) {
     return win && typeof win.addEventListener === 'function' ? win : undefined;
   }
 
+  /** Detaches the shared window `storage` listener, if attached. */
   function stopListening() {
     if (!listeningWindow) return;
     try {
@@ -654,26 +708,24 @@ export function createStorage(options = {}) {
       });
     }
     const win = getWindow();
-    if (!win) return () => {};
+    // Only a web storage area emits cross-tab `storage` events; anything else gets an inert off().
+    if (!win || !active.area) return () => {};
+    /** @type {Subscription} */
+    const entry = { fn };
     let set = subscribers.get(k);
     if (!set) {
       set = new Set();
       subscribers.set(k, set);
     }
-    set.add(fn);
+    set.add(entry);
     if (!listeningWindow) {
       win.addEventListener('storage', onStorageEvent);
       listeningWindow = win;
     }
-    let active_ = true;
     return () => {
-      if (!active_) return;
-      active_ = false;
       const current = subscribers.get(k);
-      if (current) {
-        current.delete(fn);
-        if (current.size === 0) subscribers.delete(k);
-      }
+      if (!current || !current.delete(entry)) return; // already removed (off(), destroy(), fallback)
+      if (current.size === 0) subscribers.delete(k);
       if (subscribers.size === 0) stopListening();
     };
   }
@@ -701,13 +753,15 @@ export function createStorage(options = {}) {
     destroy,
   };
 
-  /** One write / read / remove round trip; failure switches to memory. */
+  /**
+   * One write / read / remove round trip on the requested driver; any failure switches to memory.
+   * @returns {void}
+   */
   function probe() {
-    const k = prefix + PROBE_KEY;
     try {
-      requested.setItem(k, '1');
-      const back = requested.getItem(k);
-      requested.removeItem(k);
+      requested.setItem(probeKey, '1');
+      const back = requested.getItem(probeKey);
+      requested.removeItem(probeKey);
       if (back !== '1') {
         throw new StorageError(
           `Storage driver '${requested.name}' did not persist the probe value`,

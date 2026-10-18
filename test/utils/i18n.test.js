@@ -524,22 +524,41 @@ describe('loadMessages', () => {
     expect(i18n.t('c')).toBe('C');
   });
 
-  it('shares one in-flight load per locale and loader, but reloads with a new loader', async () => {
+  it('shares one in-flight load per locale and loader and releases it once settled', async () => {
     const i18n = createI18n();
-    let resolve;
-    const loader = vi.fn(() => new Promise((r) => (resolve = r)));
+    const resolvers = [];
+    const loader = vi.fn(() => new Promise((r) => resolvers.push(r)));
     const p1 = i18n.loadMessages('fr', loader);
-    const p2 = i18n.loadMessages('fr', loader);
-    expect(p1).toBe(p2);
-    expect(loader).toHaveBeenCalledTimes(1);
-    resolve({ x: '1' });
-    await p1;
     expect(i18n.loadMessages('fr', loader)).toBe(p1);
+    expect(loader).toHaveBeenCalledTimes(1);
+    // a different loader for the same locale, or the same loader for another locale, is its own flight
     const other = vi.fn(async () => ({ y: '2' }));
-    await i18n.loadMessages('fr', other);
+    const p2 = i18n.loadMessages('fr', other);
+    const p3 = i18n.loadMessages('de', loader);
+    expect(p2).not.toBe(p1);
+    expect(p3).not.toBe(p1);
+    expect(loader).toHaveBeenCalledTimes(2);
+    // all three stay shared while pending
+    expect(i18n.loadMessages('fr', loader)).toBe(p1);
+    expect(i18n.loadMessages('fr', other)).toBe(p2);
+    expect(i18n.loadMessages('de', loader)).toBe(p3);
     expect(other).toHaveBeenCalledTimes(1);
+    resolvers[1]({ d: 'D' });
+    await p3;
+    expect(i18n.hasKey('d', 'de')).toBe(true);
+    expect(i18n.hasKey('d', 'fr')).toBe(false);
+    expect(i18n.loadMessages('fr', loader)).toBe(p1); // the fr flight is still pending
+    resolvers[0]({ x: '1' });
+    await Promise.all([p1, p2]);
     expect(i18n.hasKey('x', 'fr')).toBe(true);
     expect(i18n.hasKey('y', 'fr')).toBe(true);
+    // settled flights are released: the same loader runs again (a refresh), it is not memoised
+    const p4 = i18n.loadMessages('fr', loader);
+    expect(p4).not.toBe(p1);
+    expect(loader).toHaveBeenCalledTimes(3);
+    resolvers[2]({ z: '3' });
+    await p4;
+    expect(i18n.hasKey('z', 'fr')).toBe(true);
   });
 
   it('wraps loader failures as an SdkError and allows a retry', async () => {
@@ -957,6 +976,229 @@ describe('en bundle completeness', () => {
       expect(out, key).not.toMatch(/[{}#]/);
     }
     expect(i18n.missing()).toEqual([]);
+  });
+});
+
+describe('hardening', () => {
+  it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf'])(
+    'select / plural branches ignore the prototype for value %s',
+    (value) => {
+      const i18n = createI18n();
+      expect(i18n.t('x', { s: value }, { default: '{s, select, a{A} other{B}}' })).toBe('B');
+      expect(i18n.t('x', { s: value }, { default: '{s, select, a{A}}' })).toBe(value);
+      // a custom plural selector that misbehaves cannot reach the prototype either
+      const odd = createI18n({ pluralRules: () => value });
+      expect(odd.t('ui.results', { count: 3 })).toBe('3 flights found');
+      expect(odd.t('x', { n: 3 }, { default: '{n, plural, one{one}}' })).toBe('');
+    }
+  );
+
+  it('does not let a __proto__ branch name pollute anything', () => {
+    const i18n = createI18n();
+    expect(i18n.t('x', { n: 1 }, { default: '{n, plural, __proto__{P} other{O}}' })).toBe('O');
+    expect(i18n.t('x', { s: '__proto__' }, { default: '{s, select, __proto__{P} other{O}}' })).toBe(
+      'P'
+    );
+    expect({}.P).toBeUndefined();
+    expect(Object.prototype.P).toBeUndefined();
+  });
+
+  it('renders values that cannot be dates literally instead of throwing', () => {
+    const i18n = createI18n();
+    const d = (vars) => i18n.t('x', vars, { default: '{d, date}' });
+    expect(d({ d: Symbol('s') })).toBe('Symbol(s)');
+    expect(d({ d: true })).toBe('true');
+    expect(d({ d: {} })).toBe('[object Object]');
+    expect(d({ d: 'nope' })).toBe('nope');
+    expect(d({ d: Date.UTC(2026, 10, 2) })).toContain('2026');
+    expect(i18n.t('x', { d: Symbol('s') }, { default: '{d}' })).toBe('Symbol(s)');
+    expect(i18n.t('x', { s: Symbol('s') }, { default: '{s, select, a{A} other{B}}' })).toBe('B');
+    expect(i18n.formatList([Symbol('s'), 1])).toBe('Symbol(s) and 1');
+  });
+
+  it('requires offset: to carry a number', () => {
+    const i18n = createI18n();
+    const out = i18n.t('x', { n: 2 }, { default: '{n, plural, offset: one{x} other{# y}}' });
+    expect(out).toBe('{n, plural, offset: one{x} other{# y}}');
+    // the category is chosen on n - offset: 2 - 1 → one, 3 - 1 → other, and # shows the shifted value
+    expect(i18n.t('x', { n: 2 }, { default: '{n, plural, offset:1 one{x} other{# y}}' })).toBe('x');
+    expect(i18n.t('x', { n: 3 }, { default: '{n, plural, offset:1 one{x} other{# y}}' })).toBe(
+      '2 y'
+    );
+    expect(i18n.t('x', { n: 3 }, { default: '{n, plural, offset: 1 one{x} other{# y}}' })).toBe(
+      '2 y'
+    );
+  });
+
+  it('lets the options-bag count fill an own but undefined vars.count', () => {
+    const i18n = createI18n();
+    expect(i18n.t('ui.results', { count: undefined }, { count: 2 })).toBe('2 flights found');
+    expect(i18n.t('ui.results', { count: 0 }, { count: 2 })).toBe('No flights found');
+  });
+
+  it('hasKey validates an explicit locale like dir() and setLocale() do', () => {
+    const i18n = createI18n();
+    for (const bad of ['', '  ', 42, null, {}]) {
+      let caught;
+      try {
+        i18n.hasKey('ui.continue', bad);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught, String(bad)).toBeInstanceOf(ValidationError);
+      expect(caught.issues[0].path).toBe('locale');
+    }
+    expect(i18n.hasKey('ui.continue', 'fr_fr')).toBe(true);
+  });
+
+  it('keeps the missing list bounded to the most recent 1000 keys', () => {
+    const i18n = createI18n();
+    for (let i = 0; i < 1200; i++) i18n.t(`dyn.${i}`);
+    const list = i18n.missing();
+    expect(list).toHaveLength(1000);
+    expect(list[0]).toBe('dyn.200');
+    expect(list[999]).toBe('dyn.1199');
+    // re-requesting a recorded key neither duplicates nor evicts
+    i18n.t('dyn.500');
+    expect(i18n.missing()).toHaveLength(1000);
+    expect(i18n.missing()[0]).toBe('dyn.200');
+  });
+
+  it('treats every subscription separately and skips listeners removed mid-round', () => {
+    const i18n = createI18n();
+    const fn = vi.fn();
+    const off1 = i18n.onChange(fn);
+    i18n.onChange(fn);
+    off1();
+    i18n.setLocale('fr');
+    expect(fn).toHaveBeenCalledTimes(1);
+    const second = vi.fn();
+    let offSecond;
+    i18n.onChange(() => offSecond());
+    offSecond = i18n.onChange(second);
+    i18n.setLocale('de');
+    expect(second).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an array as a loaded bundle', async () => {
+    const i18n = createI18n();
+    await expect(i18n.loadMessages('fr', async () => [{ a: 'A' }])).rejects.toBeInstanceOf(
+      ValidationError
+    );
+    expect(i18n.hasKey('a', 'fr')).toBe(false);
+    expect(i18n.locales()).toEqual(['en']);
+  });
+
+  it('releases a failed load so the same loader can run again, and a parallel loader is untouched', async () => {
+    const i18n = createI18n();
+    let reject;
+    const failing = vi.fn(() => new Promise((_, r) => (reject = r)));
+    const p1 = i18n.loadMessages('fr', failing);
+    const ok = vi.fn(async () => ({ ok: '1' }));
+    const p2 = i18n.loadMessages('fr', ok);
+    reject(new Error('boom'));
+    await expect(p1).rejects.toMatchObject({ code: 'I18N_LOAD_FAILED' });
+    await p2;
+    expect(i18n.hasKey('ok', 'fr')).toBe(true);
+    // the failed flight is released: calling again with the same loader starts a new one
+    const p3 = i18n.loadMessages('fr', failing);
+    expect(p3).not.toBe(p1);
+    expect(failing).toHaveBeenCalledTimes(2);
+    reject(new Error('again'));
+    await expect(p3).rejects.toBeInstanceOf(SdkError);
+  });
+
+  it.each([
+    ['ks', 'rtl'],
+    ['sd', 'rtl'],
+    ['nqo', 'rtl'],
+    ['ar-Latn', 'ltr'],
+    ['sd-Deva', 'ltr'],
+  ])('dir(%s) → %s for the extended RTL set', (locale, expected) => {
+    expect(createI18n().dir(locale)).toBe(expected);
+  });
+
+  it('never throws a plain Error for odd but legal inputs', () => {
+    const i18n = createI18n();
+    const odd = [Symbol('s'), 10n, -0, NaN, Infinity, [], {}, () => {}, new Date(NaN), true];
+    for (const v of odd) {
+      for (const tpl of [
+        '{v}',
+        '{v, number}',
+        '{v, date}',
+        '{v, time, short}',
+        '{v, plural, one{1} other{#}}',
+        '{v, select, a{A} other{B}}',
+      ]) {
+        let thrown;
+        try {
+          i18n.t('x', { v }, { default: tpl });
+        } catch (e) {
+          thrown = e;
+        }
+        expect(thrown, `${tpl} with ${String(v)}`).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe('en bundle consistency with sibling scripts', () => {
+  const i18n = createI18n();
+
+  it('labels every validation code validation.js can emit', () => {
+    const codes = [
+      'required',
+      'invalid',
+      'type',
+      'pattern',
+      'enum',
+      'min',
+      'max',
+      'minLength',
+      'maxLength',
+      'date',
+      'past',
+      'future',
+      'dateOrder',
+      'documentExpiry',
+      'ageForType',
+      'infantsPerAdult',
+      'maxPassengers',
+      'childAges',
+      'nameLength',
+      'passwordPolicy',
+      'email',
+      'phone',
+      'iata',
+      'sameAirport',
+      'postalCode',
+      'passport',
+      'gstin',
+      'name',
+      'promo',
+      'card',
+      'cardExpiry',
+      'cvv',
+    ];
+    for (const code of codes) {
+      const key = `validation.${code}`;
+      expect(i18n.hasKey(key), key).toBe(true);
+      expect(i18n.t(key, { min: 2, max: 2, months: 6 })).not.toBe(key);
+    }
+  });
+
+  it('describes the night bucket as the early-morning alias datetime.timeBucket defines', () => {
+    expect(i18n.t('common.timeBucketRanges.night')).toBe(
+      i18n.t('common.timeBucketRanges.early_morning')
+    );
+    expect(i18n.t('common.timeBucketRanges.evening')).toBe('18:00 – 24:00');
+  });
+
+  it('takes the {duration} and {airport} vars format.formatLayovers passes', () => {
+    // same copy as format.js's own fallback and the docs/api/03-utils.md §3 example (`2h 10m in DXB`)
+    expect(i18n.t('common.layover', { duration: '2h 10m', airport: 'DXB' })).toBe('2h 10m in DXB');
+    expect(i18n.t('common.operatedBy', { airline: 'Air India' })).toBe('Operated by Air India');
   });
 });
 

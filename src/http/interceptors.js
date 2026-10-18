@@ -6,8 +6,12 @@
  * Interceptors only touch the spec / response / error they are handed, the `ctx.meta` map and the
  * storage they were given: they never call `fetch`, never emit events, never log outside the injected
  * logger, keep no module‑level mutable state and look `document` / timers up at call time only
- * (SSR‑safe). Plain `Error`s are never thrown: bad options raise `ConfigError`, an aborted wait raises
- * `AbortError`, and backend failures become the `ApiError` family through `errors.errorFromResponse`.
+ * (SSR‑safe). Response‑stage handlers mutate the response in place and return `undefined`, so the
+ * client keeps the very object (and fields such as `raw`) instead of re‑wrapping a returned copy;
+ * delayed retries go through `ctx.retry({ delayMs })`, so the client owns the timer and `http:retry`
+ * carries the real delay. Plain `Error`s are never thrown: bad options raise `ConfigError`, an
+ * aborted wait raises `AbortError`, and backend failures become the `ApiError` family through
+ * `errors.errorFromResponse`.
  */
 
 import {
@@ -22,7 +26,7 @@ import {
   requestId as makeRequestId,
   uuid,
 } from '../utils/id.js';
-import { isPlainObject } from '../utils/object.js';
+import { isPlainObject, stableStringify } from '../utils/object.js';
 import { withParams } from '../utils/url.js';
 
 /** @typedef {import('../types.js').RequestSpec} RequestSpec */
@@ -113,19 +117,25 @@ const STAGES = /** @type {const} */ (['request', 'response', 'error']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PROBLEM_TYPE = /application\/problem\+json/i;
 const ABSOLUTE_URL = /^[a-z][a-z0-9+.-]*:\/\//i;
+/**
+ * `ctx.meta` keys of the cross‑stage bookkeeping. The client copies `ctx.meta` into
+ * `response.meta`, so nothing secret (tokens) is ever kept here and `stripMeta()` removes these
+ * keys before a response's `meta` is persisted.
+ */
 const META = Object.freeze({
   authRetried: 'auth:retried',
   cacheKey: 'cache:key',
   correlationId: 'correlation:id',
   dedupeKey: 'dedupe:key',
   dedupeFollower: 'dedupe:follower',
-  envelope: 'envelope:unwrapped',
   idempotencyKey: 'idempotency:key',
   rateLimitRetries: 'rateLimit:retries',
   telemetryStart: 'telemetry:startedAt',
 });
 const DEFAULT_REDACT = Object.freeze(['authorization', 'password', 'card', 'documents']);
 const REDACTED = '[redacted]';
+/** Resolution of a dedupe deferred that tells followers to issue their own request instead. */
+const DEDUPE_RELEASED = Symbol('dedupe:released');
 
 // ── small helpers ───────────────────────────────────────────────────────────────────────────────
 
@@ -264,10 +274,27 @@ function toHeaders(headers) {
   return obj;
 }
 
-/** @param {RequestSpec} spec @returns {Record<string, string>} `spec.headers`, created when missing */
+/**
+ * `spec.headers` as a plain object, created when missing; a `Headers` / `Map` container is copied
+ * into a plain object first so the caller's headers survive.
+ * @param {RequestSpec} spec
+ * @returns {Record<string, string>}
+ */
 function ensureHeaders(spec) {
-  if (!isPlainObject(spec.headers)) spec.headers = {};
+  if (!isPlainObject(spec.headers)) {
+    spec.headers = isObjectLike(spec.headers) ? headersToObject(spec.headers) : {};
+  }
   return /** @type {Record<string, string>} */ (spec.headers);
+}
+
+/** @param {unknown} headers @returns {Headers|Record<string, string>} an independent copy (own `Headers` when the runtime has one) */
+function copyHeaders(headers) {
+  const obj = headersToObject(headers);
+  if (typeof Headers === 'function') {
+    const made = safe(() => new Headers(obj));
+    if (made) return made;
+  }
+  return obj;
 }
 
 /** @param {unknown} spec @param {string} name @returns {boolean} */
@@ -296,6 +323,27 @@ function applyHeader(spec, ctx, name, value) {
 }
 
 /**
+ * Delete a header from the spec (any casing) and mirror the removal through `ctx.setHeader(name,
+ * undefined)` when the client offers one.
+ * @param {RequestSpec} spec
+ * @param {HttpContext|undefined} ctx
+ * @param {string} name
+ */
+function removeHeader(spec, ctx, name) {
+  if (!isObjectLike(spec)) return;
+  const headers = /** @type {any} */ (spec).headers;
+  if (isPlainObject(headers)) {
+    const lower = name.toLowerCase();
+    for (const k of Object.keys(headers)) if (k.toLowerCase() === lower) delete headers[k];
+  } else if (isObjectLike(headers) && typeof (/** @type {any} */ (headers).delete) === 'function') {
+    safe(() => /** @type {any} */ (headers).delete(name));
+  }
+  if (ctx && typeof ctx.setHeader === 'function') {
+    safe(() => /** @type {any} */ (ctx).setHeader(name, undefined));
+  }
+}
+
+/**
  * Set a header unless the caller already supplied one (caller headers always win).
  * @param {RequestSpec} spec
  * @param {HttpContext|undefined} ctx
@@ -317,6 +365,17 @@ function metaGet(ctx, key) {
   if (m instanceof Map) return m.get(key);
   if (isPlainObject(m)) return m[key];
   return undefined;
+}
+
+const META_KEYS = new Set(Object.values(META));
+
+/** @param {unknown} meta @returns {Record<string, unknown>|undefined} `meta` without the interceptors' bookkeeping keys */
+function stripMeta(meta) {
+  if (!isPlainObject(meta)) return undefined;
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (const [k, v] of Object.entries(meta)) if (!META_KEYS.has(k)) out[k] = v;
+  return out;
 }
 
 /** @param {unknown} ctx @param {string} key @param {unknown} value */
@@ -402,12 +461,50 @@ function wait(ms, timers, signal) {
   });
 }
 
-/** Cache / dedupe identity: method + url(+query) + `Accept-Language` + `X-Currency`. @param {unknown} spec @returns {string} */
+/**
+ * Stable text of a JSON‑able body for cache / dedupe identity: `''` for none, the string itself,
+ * `stableStringify` for plain data; `undefined` for bodies that have no stable text (binary,
+ * multipart, streams, cycles), which are never cached or deduped.
+ * @param {unknown} body
+ * @returns {string|undefined}
+ */
+function bodyKeyOf(body) {
+  if (body === undefined || body === null) return '';
+  if (typeof body === 'string') return body;
+  if (typeof body === 'number' || typeof body === 'boolean') return String(body);
+  if (isPlainObject(body) || Array.isArray(body)) return safe(() => stableStringify(body));
+  return undefined;
+}
+
+/**
+ * Cache / dedupe identity parts: method, url(+query), `Accept-Language`, `X-Currency` and the body
+ * text (`''` for GET‑like requests); `undefined` when the body cannot be keyed.
+ * @param {unknown} spec
+ * @returns {{ method: string, url: string, lang: string, currency: string, body: string }|undefined}
+ */
+function identityPartsOf(spec) {
+  const s = isObjectLike(spec) ? /** @type {any} */ (spec) : {};
+  const body = bodyKeyOf(s.body);
+  if (body === undefined) return undefined;
+  return {
+    method: methodOf(spec),
+    url: urlOf(spec),
+    lang: headerOf(s.headers, 'Accept-Language') || '',
+    currency: headerOf(s.headers, 'X-Currency') || '',
+    body,
+  };
+}
+
+/**
+ * Cache / dedupe identity: `<METHOD> <url+query>|<Accept-Language>|<X-Currency>` plus `|<body>` when
+ * the request carries one; `undefined` when the body cannot be keyed.
+ * @param {unknown} spec
+ * @returns {string|undefined}
+ */
 function identityOf(spec) {
-  const headers = isObjectLike(spec) ? /** @type {any} */ (spec).headers : undefined;
-  const lang = headerOf(headers, 'Accept-Language') || '';
-  const currency = headerOf(headers, 'X-Currency') || '';
-  return `${methodOf(spec)} ${urlOf(spec)}|${lang}|${currency}`;
+  const p = identityPartsOf(spec);
+  if (!p) return undefined;
+  return `${p.method} ${p.url}|${p.lang}|${p.currency}${p.body ? `|${p.body}` : ''}`;
 }
 
 /**
@@ -477,20 +574,21 @@ function statusOf(err, ctx) {
 }
 
 /**
- * Deep copy with the values of matching keys (case‑insensitive) replaced; header containers become
- * plain objects, other exotic objects their tag.
+ * Deep copy with the values of matching keys replaced (`isSecret(key)` decides); header containers
+ * become plain objects, other exotic objects their tag; `__proto__` keys are dropped so untrusted
+ * bodies cannot reshape the log record.
  * @param {unknown} value
- * @param {Set<string>} keys
+ * @param {(key: string) => boolean} isSecret
  * @param {WeakSet<object>} [seen]
  * @param {number} [depth]
  * @returns {unknown}
  */
-function redactDeep(value, keys, seen = new WeakSet(), depth = 0) {
+function redactDeep(value, isSecret, seen = new WeakSet(), depth = 0) {
   if (!isObjectLike(value)) return value;
   if (depth > 10) return '[depth]';
   if (seen.has(value)) return '[circular]';
   seen.add(value);
-  if (Array.isArray(value)) return value.map((v) => redactDeep(v, keys, seen, depth + 1));
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, isSecret, seen, depth + 1));
   const source = isHeadersLike(value) || value instanceof Map ? headersToObject(value) : value;
   if (!isPlainObject(source)) {
     const ctor = /** @type {any} */ (source).constructor;
@@ -499,7 +597,8 @@ function redactDeep(value, keys, seen = new WeakSet(), depth = 0) {
   /** @type {Record<string, unknown>} */
   const out = {};
   for (const [k, v] of Object.entries(source)) {
-    out[k] = keys.has(k.toLowerCase()) ? REDACTED : redactDeep(v, keys, seen, depth + 1);
+    if (k === '__proto__') continue;
+    out[k] = isSecret(k) ? REDACTED : redactDeep(v, isSecret, seen, depth + 1);
   }
   return out;
 }
@@ -573,12 +672,17 @@ function isStorageLike(v) {
 // ── factories ───────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Attach credentials and recover from `401` once per request. Request stage: `Authorization: Bearer
- * <token>` from `auth.getAccessToken()`, else `X-Guest-Token` (`guestHeader`) from
- * `auth.getGuestToken()` while `auth.isGuest()`; skipped when `spec.auth === false` or the path is
- * excluded; caller‑supplied headers win; also injects `ctx.auth = { getToken, refresh }`. Error
- * stage: on a 401 (not excluded, not `auth: false`, at most once per request) `await auth.refresh()`
- * then `return ctx.retry()`; when the refresh throws the original error is rethrown. Clearing the
+ * Attach credentials and recover from `401` once per request.
+ * Request stage: `Authorization: Bearer <token>` from `auth.getAccessToken()`, else `X-Guest-Token`
+ * (`guestHeader`) from `auth.getGuestToken()` while `auth.isGuest()`; skipped when `spec.auth ===
+ * false` or the path is excluded; caller‑supplied credentials win (and are left alone on 401); also
+ * injects `ctx.auth = { getToken, refresh }`. Error stage, on a 401 (not excluded, not `auth: false`,
+ * at most once per request): when the session's credentials already differ from the ones sent
+ * (another request refreshed them meanwhile) the request is retried with them straight away;
+ * otherwise `auth.refresh()` runs single‑flight (one refresh shared by every concurrent 401 and by
+ * `ctx.auth.refresh()`). Either way the credentials written on `ctx.spec` are replaced by the fresh
+ * ones before `return ctx.retry()` — the retry re‑enters at the cache / dedupe stage, so the request
+ * stage does not run again. When the refresh throws the original error is rethrown. Clearing the
  * session and emitting `auth:expired` on a failed refresh is `auth.refresh()`'s own job.
  * Effects: none of its own (the retry is a new attempt of the same request).
  * @param {{ auth: AuthLike, exclude?: Array<RegExp|string>, guestHeader?: string }} options
@@ -595,31 +699,58 @@ export function authInterceptor(options) {
   const guestHeader = str(o.guestHeader) || 'X-Guest-Token';
   const skip = (/** @type {unknown} */ spec) =>
     (isObjectLike(spec) && /** @type {any} */ (spec).auth === false) || isExcluded(excluded, spec);
+  /** The refresh every concurrent 401 shares; released once it settles. @type {Promise<unknown>|null} */
+  let refreshing = null;
+  /**
+   * The credentials this bundle wrote per request, keyed by `ctx` (never in `ctx.meta`: the client
+   * copies that map into `response.meta`, which the cache persists).
+   * @type {WeakMap<object, { header: string, value: string }>}
+   */
+  const sent = new WeakMap();
+
+  const refreshShared = () => {
+    if (typeof auth.refresh !== 'function') {
+      return Promise.reject(configError('authInterceptor', '`auth.refresh()` is not available'));
+    }
+    if (refreshing) return refreshing;
+    const shared = Promise.resolve()
+      .then(() => /** @type {() => Promise<unknown>} */ (auth.refresh)())
+      .finally(() => {
+        if (refreshing === shared) refreshing = null;
+      });
+    shared.catch(() => {}); // every awaiter handles its own rejection
+    refreshing = shared;
+    return shared;
+  };
+
+  /** Credentials the session offers right now: `[header, value]`, or `undefined` when anonymous. @returns {[string, string]|undefined} */
+  const credentialsFor = () => {
+    const token = str(safe(() => auth.getAccessToken()));
+    if (token) return ['Authorization', `Bearer ${token}`];
+    const guestToken =
+      typeof auth.getGuestToken === 'function' ? str(safe(() => auth.getGuestToken())) : undefined;
+    const isGuest =
+      typeof auth.isGuest === 'function'
+        ? safe(() => /** @type {() => boolean} */ (auth.isGuest)()) === true
+        : guestToken !== undefined;
+    return isGuest && guestToken ? [guestHeader, guestToken] : undefined;
+  };
 
   /** @type {RequestInterceptor} */
   const request = (spec, ctx) => {
     if (isObjectLike(ctx) && !(/** @type {any} */ (ctx).auth)) {
       safe(() => {
         /** @type {any} */ (ctx).auth = {
-          getToken: () => safe(() => auth.getAccessToken(), null) ?? null,
-          refresh: () =>
-            typeof auth.refresh === 'function'
-              ? auth.refresh()
-              : Promise.reject(configError('authInterceptor', '`auth.refresh()` is not available')),
+          getToken: () => str(safe(() => auth.getAccessToken())) ?? null,
+          refresh: refreshShared,
         };
       });
     }
     if (!isObjectLike(spec) || skip(spec)) return spec;
-    const token = str(auth.getAccessToken());
-    if (token) {
-      setHeaderIfAbsent(spec, ctx, 'Authorization', `Bearer ${token}`);
-      return spec;
+    const creds = credentialsFor();
+    if (creds && setHeaderIfAbsent(spec, ctx, creds[0], creds[1]) && isObjectLike(ctx)) {
+      sent.set(ctx, { header: creds[0], value: creds[1] });
     }
-    const guestToken =
-      typeof auth.getGuestToken === 'function' ? str(auth.getGuestToken()) : undefined;
-    const isGuest =
-      typeof auth.isGuest === 'function' ? auth.isGuest() === true : guestToken !== undefined;
-    if (isGuest && guestToken) setHeaderIfAbsent(spec, ctx, guestHeader, guestToken);
     return spec;
   };
 
@@ -627,14 +758,33 @@ export function authInterceptor(options) {
   const error = async (err, ctx) => {
     if (statusOf(err, ctx) !== 401) return undefined;
     if (!isObjectLike(ctx) || typeof ctx.retry !== 'function') return undefined;
-    if (typeof auth.refresh !== 'function') return undefined;
     if (skip(ctx.spec)) return undefined;
     if (metaGet(ctx, META.authRetried)) return undefined;
+    const written = sent.get(ctx);
+    const callerSupplied =
+      written === undefined &&
+      (hasHeader(ctx.spec, 'Authorization') || hasHeader(ctx.spec, guestHeader));
+    if (callerSupplied) return undefined;
+    let creds = credentialsFor();
+    const changed = creds !== undefined && creds[1] !== written?.value;
+    if (!changed && typeof auth.refresh !== 'function') return undefined;
     metaSet(ctx, META.authRetried, true);
-    try {
-      await auth.refresh();
-    } catch {
-      throw err;
+    if (!changed) {
+      try {
+        await refreshShared();
+      } catch {
+        throw err;
+      }
+      creds = credentialsFor();
+    }
+    if (written && (!creds || creds[0] !== written.header)) {
+      removeHeader(ctx.spec, ctx, written.header);
+    }
+    if (creds) {
+      applyHeader(ctx.spec, ctx, creds[0], creds[1]);
+      sent.set(ctx, { header: creds[0], value: creds[1] });
+    } else {
+      sent.delete(ctx);
     }
     return ctx.retry();
   };
@@ -755,9 +905,9 @@ export function correlationInterceptor(options = {}) {
 
 /**
  * `Idempotency-Key` for POST / PUT / PATCH / DELETE when `spec.idempotencyKey` is set: a string is
- * used as is, `true` derives `utils/id.idempotencyKey(path, body)` (same path + structurally equal
- * body → same key, so a retried create is recognised). GET / HEAD / OPTIONS and an existing header
- * are left alone. Effects: none.
+ * used as is, `true` derives `utils/id.idempotencyKey(path(+query), body)` (same path, query and
+ * structurally equal body → same key, so a retried create is recognised and two creates that differ
+ * only by query are not). GET / HEAD / OPTIONS and an existing header are left alone. Effects: none.
  * @param {{ header?: string }} [options]
  * @returns {InterceptorBundle}
  */
@@ -773,9 +923,7 @@ export function idempotencyInterceptor(options = {}) {
     /** @type {string|undefined} */
     let key;
     if (typeof wanted === 'string' && wanted.trim() !== '') key = wanted;
-    else if (wanted === true) {
-      key = makeIdempotencyKey(str(s.path) || str(s.url) || methodOf(spec), s.body);
-    }
+    else if (wanted === true) key = makeIdempotencyKey(urlOf(spec) || methodOf(spec), s.body);
     if (!key) return spec;
     applyHeader(spec, ctx, header, key);
     metaSet(ctx, META.idempotencyKey, key);
@@ -785,10 +933,11 @@ export function idempotencyInterceptor(options = {}) {
 }
 
 /**
- * Unwrap `{ data, meta, dictionaries }` envelopes (only when the body is a plain object with a
- * `data` key, once per request): `response.data = body.data`, `response.meta = { ...meta,
- * dictionaries }` (merged over any existing `response.meta`), the untouched envelope on
- * `response.raw` for the adapters. Effects: none.
+ * Unwrap `{ data, meta, dictionaries }` envelopes in place (only when the body is a plain object
+ * with a `data` key, once per response object — a retry's response is a new object and is unwrapped
+ * too): `response.data = body.data`, `response.meta = { ...meta, dictionaries }` (merged over any
+ * existing `response.meta`), the untouched envelope on `response.raw` for the adapters. Returns
+ * `undefined` so the client keeps the same response object. Effects: none.
  * @param {{ dataKey?: string, metaKey?: string, dictionariesKey?: string }} [options]
  * @returns {InterceptorBundle}
  */
@@ -797,21 +946,24 @@ export function envelopeInterceptor(options = {}) {
   const dataKey = str(o.dataKey) || 'data';
   const metaKey = str(o.metaKey) || 'meta';
   const dictionariesKey = str(o.dictionariesKey) || 'dictionaries';
+  /** Response objects already unwrapped (their inner data may itself carry a `data` key). */
+  const unwrapped = new WeakSet();
   /** @type {ResponseInterceptor} */
-  const response = (res, ctx) => {
-    if (!isObjectLike(res)) return res;
+  const response = (res) => {
+    if (!isObjectLike(res) || unwrapped.has(res)) return undefined;
     const r = /** @type {any} */ (res);
     const body = r.data;
-    if (!isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, dataKey)) return res;
-    if (metaGet(ctx, META.envelope)) return res;
+    if (!isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, dataKey)) {
+      return undefined;
+    }
+    unwrapped.add(res);
     /** @type {Record<string, unknown>} */
     const meta = isPlainObject(body[metaKey]) ? { ...body[metaKey] } : {};
     if (body[dictionariesKey] !== undefined) meta.dictionaries = body[dictionariesKey];
     r.raw = body;
     r.data = body[dataKey];
     r.meta = isPlainObject(r.meta) ? { ...r.meta, ...meta } : meta;
-    metaSet(ctx, META.envelope, true);
-    return res;
+    return undefined;
   };
   return bundle('envelope', { response });
 }
@@ -819,10 +971,13 @@ export function envelopeInterceptor(options = {}) {
 /**
  * Map backend failures to the `SdkError` taxonomy. Error stage: a not‑yet‑mapped error carrying a
  * status ≥ 400 (its own, or `ctx.response.status`) becomes `errors.errorFromResponse(status, body,
- * headers, { requestId, map })` — the body is `ctx.data`, else `error.problem | body | data`; errors
- * without a status (network, timeout, abort, validation) and already specific `ApiError` subclasses
- * pass through untouched. Response stage: a response with status ≥ 400 or an
- * `application/problem+json` content type is thrown as that error. Effects: none.
+ * headers, { requestId, map })` — the body is the error's own `problem | body | data`, else
+ * `ctx.data` (the parsed body of the attempt a response interceptor rejected); `requestId` is the
+ * server's `X-Request-Id`, else the error's, else `ctx.id`. Errors without a status (network,
+ * timeout, abort, validation) and already specific `ApiError` subclasses pass through untouched,
+ * unless `map` names their `code` (then the host's class wins). Response stage: a response with
+ * status ≥ 400 or an `application/problem+json` content type is thrown as that error; others pass
+ * (`undefined`). Effects: none.
  * @param {{ map?: Record<string, typeof ApiError | ((ctx: ProblemContext) => ApiError)> }} [options]
  * @returns {InterceptorBundle}
  * @throws {ConfigError} when `map` is not an object
@@ -841,33 +996,49 @@ export function problemInterceptor(options = {}) {
     /** @type {string|undefined} */ fallbackId
   ) =>
     errorFromResponse(status, body, /** @type {any} */ (headers), {
-      requestId: str(isObjectLike(ctx) ? /** @type {any} */ (ctx).id : undefined) || fallbackId,
+      requestId:
+        headerOf(headers, 'x-request-id') ||
+        fallbackId ||
+        str(isObjectLike(ctx) ? /** @type {any} */ (ctx).id : undefined),
       map,
     });
+  /** Whether `map` asks for a different class than the one `err` already has. @param {any} err */
+  const remaps = (err) => {
+    if (
+      !map ||
+      typeof err.code !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(map, err.code)
+    )
+      return false;
+    const target = /** @type {any} */ (map[err.code]);
+    if (typeof target !== 'function') return false;
+    const isClass = target.prototype instanceof ApiError || target === ApiError;
+    return !(isClass && err instanceof target);
+  };
 
   /** @type {ResponseInterceptor} */
   const response = (res, ctx) => {
-    if (!isObjectLike(res)) return res;
+    if (!isObjectLike(res)) return undefined;
     const r = /** @type {any} */ (res);
     const status = Number(r.status);
     const type = headerOf(r.headers, 'content-type') || '';
     if ((Number.isFinite(status) && status >= 400) || PROBLEM_TYPE.test(type)) {
       throw convert(status, r.data, r.headers, ctx, str(r.requestId));
     }
-    return res;
+    return undefined;
   };
 
   /** @type {ErrorInterceptor} */
   const error = (err, ctx) => {
     if (!isObjectLike(err)) return undefined;
-    if (err instanceof ApiError && err.name !== 'ApiError') return undefined;
+    if (err instanceof ApiError && err.name !== 'ApiError' && !remaps(err)) return undefined;
     if (isSdkError(err) && !(err instanceof ApiError)) return undefined;
     const status = statusOf(err, ctx);
     if (status < 400) return undefined;
     const e = /** @type {any} */ (err);
     const res = isObjectLike(ctx) ? ctx.response : undefined;
-    const data = isObjectLike(ctx) ? ctx.data : undefined;
-    const body = data !== undefined ? data : (e.problem ?? e.body ?? e.data);
+    const own = e.problem ?? e.body ?? e.data;
+    const body = own !== undefined ? own : isObjectLike(ctx) ? ctx.data : undefined;
     const headers = isObjectLike(res) ? res.headers : e.headers;
     return convert(status, body, headers, ctx, str(e.requestId));
   };
@@ -876,11 +1047,13 @@ export function problemInterceptor(options = {}) {
 }
 
 /**
- * On `429` wait `min(Retry-After, maxWaitMs)` (`defaultWaitMs` when the server sent no header) on
- * the injectable timers, then `return ctx.retry()`; at most `maxRetries` times per request, and
- * aborting `ctx.signal` during the wait rejects with `AbortError` and clears the timer. Other errors
- * pass through. Effects: timer.
- * @param {{ maxWaitMs?: number, maxRetries?: number, defaultWaitMs?: number, timers?: TimersLike, now?: () => number }} [options]
+ * On `429` ask the client for a delayed retry: `return ctx.retry({ delayMs })` with `delayMs =
+ * min(Retry-After, maxWaitMs)` (`error.retryAfterMs`, else the `Retry-After` header as delta
+ * seconds or HTTP date, else `defaultWaitMs`), at most `maxRetries` times per request. The client
+ * owns the wait: it runs on the client's timers, `http:retry` / `onRetry(ctx, delayMs)` carry the
+ * real delay, and aborting the request during the wait rejects with `AbortError`. Other errors pass
+ * through. Effects: timer (the client's, through `ctx.retry`).
+ * @param {{ maxWaitMs?: number, maxRetries?: number, defaultWaitMs?: number, now?: () => number }} [options]
  * @returns {InterceptorBundle}
  * @throws {ConfigError} on a negative / non‑numeric option
  */
@@ -894,7 +1067,6 @@ export function rateLimitInterceptor(options = {}) {
       throw configError('rateLimitInterceptor', `\`${name}\` must be a non-negative number`);
     }
   }
-  const timers = /** @type {TimersLike|undefined} */ (o.timers);
   const now = /** @type {(() => number)|undefined} */ (o.now);
 
   const retryAfterOf = (/** @type {any} */ err, /** @type {any} */ ctx) => {
@@ -905,7 +1077,7 @@ export function rateLimitInterceptor(options = {}) {
   };
 
   /** @type {ErrorInterceptor} */
-  const error = async (err, ctx) => {
+  const error = (err, ctx) => {
     if (statusOf(err, ctx) !== 429) return undefined;
     if (!isObjectLike(ctx) || typeof ctx.retry !== 'function') return undefined;
     const used = Number(metaGet(ctx, META.rateLimitRetries)) || 0;
@@ -913,8 +1085,7 @@ export function rateLimitInterceptor(options = {}) {
     metaSet(ctx, META.rateLimitRetries, used + 1);
     const wanted = retryAfterOf(err, ctx);
     const delayMs = Math.min(wanted === undefined ? defaultWaitMs : wanted, maxWaitMs);
-    await wait(delayMs, timers, ctx.signal);
-    return ctx.retry();
+    return ctx.retry({ delayMs });
   };
 
   return bundle('rateLimit', { error });
@@ -923,13 +1094,16 @@ export function rateLimitInterceptor(options = {}) {
 /**
  * Serve and store responses when `spec.cache` is set (`{ ttlMs, key? }` or `true` with
  * `defaultTtlMs`) for the listed `methods`. Keys are `cache:<METHOD> <url+query>|<Accept-Language>|
- * <X-Currency>` (or `cache:<spec.cache.key>|…`). A fresh entry short‑circuits with
- * `{ …, fromCache: true }`; a 2xx response is stored with `expiresAt = now + ttlMs` (after envelope
- * unwrapping, so `meta` travels with it). Without `storage` an in‑memory map is used. The bundle
- * also carries `key(spec)`, `invalidate(key)` and `clear(pattern?)` for `http.cache`.
+ * <X-Currency>` (or `cache:<spec.cache.key>|…`), plus `|<body>` for requests that carry one (so a
+ * cacheable POST is keyed by its body too); a request whose body has no stable text (binary,
+ * multipart) is never cached. A fresh entry short‑circuits with `{ …, fromCache: true }`; a 2xx
+ * response is stored with `expiresAt = now + ttlMs` (after envelope unwrapping, so `meta` travels
+ * with it, minus the interceptors' own `ctx.meta` bookkeeping the client mirrors into
+ * `response.meta`). Without `storage` an in‑memory map is used. The bundle also carries `key(spec)`,
+ * `invalidate(key)` and `clear(pattern?)` for `http.cache`.
  * Effects: storage `cache:*`.
  * @param {{ storage?: StorageLike, defaultTtlMs?: number, methods?: string[], now?: () => number, prefix?: string }} [options]
- * @returns {InterceptorBundle & { key: (spec: RequestSpec) => string, invalidate: (key: string) => void, clear: (pattern?: string|RegExp) => void }}
+ * @returns {InterceptorBundle & { key: (spec: RequestSpec) => string|undefined, invalidate: (key: string) => void, clear: (pattern?: string|RegExp) => void }}
  * @throws {ConfigError} on a bad `storage`, `defaultTtlMs` or `methods`
  */
 export function cacheInterceptor(options = {}) {
@@ -951,11 +1125,12 @@ export function cacheInterceptor(options = {}) {
   const clock = () => nowMs(now);
 
   const key = (/** @type {RequestSpec} */ spec) => {
+    const p = identityPartsOf(spec);
+    if (!p) return undefined;
     const custom =
       isObjectLike(spec) && isPlainObject(spec.cache) ? str(spec.cache.key) : undefined;
-    return custom
-      ? `${prefix}${custom}|${identityOf(spec).split('|').slice(1).join('|')}`
-      : `${prefix}${identityOf(spec)}`;
+    const head = custom ? custom : `${p.method} ${p.url}`;
+    return `${prefix}${head}|${p.lang}|${p.currency}${p.body ? `|${p.body}` : ''}`;
   };
   const ttlOf = (/** @type {unknown} */ spec) => {
     const cache = isObjectLike(spec) ? /** @type {any} */ (spec).cache : undefined;
@@ -974,6 +1149,7 @@ export function cacheInterceptor(options = {}) {
   const request = (spec, ctx) => {
     if (!isObjectLike(spec) || !spec.cache || !methods.has(methodOf(spec))) return spec;
     const k = key(spec);
+    if (k === undefined) return spec;
     metaSet(ctx, META.cacheKey, k);
     const entry = safe(() => storage.get(k));
     if (isPlainObject(entry) && Object.prototype.hasOwnProperty.call(entry, 'data')) {
@@ -996,23 +1172,23 @@ export function cacheInterceptor(options = {}) {
   /** @type {ResponseInterceptor} */
   const response = (res, ctx) => {
     const k = metaGet(ctx, META.cacheKey);
-    if (typeof k !== 'string' || !isObjectLike(res)) return res;
+    if (typeof k !== 'string' || !isObjectLike(res)) return undefined;
     const r = /** @type {any} */ (res);
     const status = r.status === undefined ? 200 : Number(r.status);
-    if (r.fromCache === true || !(status >= 200 && status < 300)) return res;
+    if (r.fromCache === true || !(status >= 200 && status < 300)) return undefined;
     const ttlMs = ttlOf(isObjectLike(ctx) ? ctx.spec : undefined);
-    if (!ttlMs) return res;
+    if (!ttlMs) return undefined;
     const storedAt = clock();
     const entry = {
       data: r.data,
       status,
       headers: headersToObject(r.headers),
-      meta: r.meta,
+      meta: stripMeta(r.meta),
       storedAt,
       expiresAt: storedAt + ttlMs,
     };
     safe(() => storage.set(k, entry, { ttlMs }));
-    return res;
+    return undefined;
   };
 
   const invalidate = (/** @type {string} */ k) => {
@@ -1038,11 +1214,16 @@ export function cacheInterceptor(options = {}) {
 }
 
 /**
- * Share the outcome of identical in‑flight requests (GET / HEAD by default, unless `spec.dedupe ===
- * false`): the first request with a key becomes the leader and the bundle holds a deferred per key
- * in a `Map`; followers short‑circuit with a promise of the leader's response (`deduped: true`).
- * The leader's response resolves them and its final error rejects them; both release the key. A
- * leader re‑entering the request stage on retry is never treated as its own follower. The bundle
+ * Share the outcome of identical in‑flight requests (GET / HEAD by default; any method when
+ * `spec.dedupe === true`; never when `spec.dedupe === false` or the body has no stable text): the
+ * first request with a key becomes the leader and the bundle holds a deferred per key in a `Map`;
+ * followers short‑circuit with a promise of the leader's response (a copy with its own `Headers`
+ * and `deduped: true`) that rejects with `AbortError` as soon as the follower's own `ctx.signal`
+ * aborts. The leader's response resolves them. A final failure of the leader (not retryable, or no
+ * retry budget left) rejects them; a retryable failure — the client may still retry the leader, so
+ * it is not the request's outcome — or the leader's abort releases them instead: their request
+ * stage resumes with their own spec, so a transient error is never fanned out. Both release the key.
+ * A leader re‑entering the request stage on retry is never treated as its own follower. The bundle
  * also carries `inflight()` (number of keys held). Effects: none.
  * @param {{ methods?: string[] }} [options]
  * @returns {InterceptorBundle & { inflight: () => number }}
@@ -1054,27 +1235,66 @@ export function dedupeInterceptor(options = {}) {
     throw configError('dedupeInterceptor', '`methods` must be an array');
   }
   const methods = new Set((o.methods || ['GET', 'HEAD']).map((m) => String(m).toUpperCase()));
-  /** @type {Map<string, { promise: Promise<HttpResponse>, resolve: (r: HttpResponse) => void, reject: (e: unknown) => void, ownerId: string|undefined }>} */
+  /** @typedef {HttpResponse | typeof DEDUPE_RELEASED} Outcome */
+  /** @type {Map<string, { promise: Promise<Outcome>, resolve: (r: Outcome) => void, reject: (e: unknown) => void, ownerId: string|undefined }>} */
   const pending = new Map();
+
+  /**
+   * A follower's short‑circuit: the leader's response (own copy) or, when released, the follower's
+   * own spec; the follower's abort wins over both.
+   * @param {Promise<Outcome>} shared
+   * @param {RequestSpec} spec
+   * @param {HttpContext|undefined} ctx
+   * @returns {Promise<HttpResponse|RequestSpec>}
+   */
+  const follow = (shared, spec, ctx) =>
+    new Promise((resolve, reject) => {
+      const signal = isObjectLike(ctx) ? ctx.signal : undefined;
+      if (signal && signal.aborted) {
+        reject(abortError(signal));
+        return;
+      }
+      const listen = !!signal && typeof signal.addEventListener === 'function';
+      const onAbort = () => reject(abortError(signal));
+      if (listen)
+        /** @type {AbortSignal} */ (signal).addEventListener('abort', onAbort, { once: true });
+      const done = () => {
+        if (listen) /** @type {AbortSignal} */ (signal).removeEventListener('abort', onAbort);
+      };
+      shared.then(
+        (outcome) => {
+          done();
+          if (outcome === DEDUPE_RELEASED) resolve(spec);
+          else {
+            const res = /** @type {any} */ (outcome);
+            resolve({ ...res, headers: copyHeaders(res.headers), deduped: true });
+          }
+        },
+        (e) => {
+          done();
+          reject(e);
+        }
+      );
+    });
 
   /** @type {RequestInterceptor} */
   const request = (spec, ctx) => {
-    if (!isObjectLike(spec) || /** @type {any} */ (spec).dedupe === false) return spec;
-    if (!methods.has(methodOf(spec))) return spec;
+    if (!isObjectLike(spec)) return spec;
+    const wanted = /** @type {any} */ (spec).dedupe;
+    if (wanted === false || (wanted !== true && !methods.has(methodOf(spec)))) return spec;
     const key = identityOf(spec);
+    if (key === undefined) return spec;
     const existing = pending.get(key);
     if (existing && metaGet(ctx, META.dedupeKey) !== key) {
       metaSet(ctx, META.dedupeFollower, key);
-      return existing.promise.then(
-        (res) => /** @type {HttpResponse} */ ({ ...res, deduped: true })
-      );
+      return follow(existing.promise, spec, ctx);
     }
     if (!existing) {
-      /** @type {(r: HttpResponse) => void} */
+      /** @type {(r: Outcome) => void} */
       let resolve = () => {};
       /** @type {(e: unknown) => void} */
       let reject = () => {};
-      /** @type {Promise<HttpResponse>} */
+      /** @type {Promise<Outcome>} */
       const promise = new Promise((res, rej) => {
         resolve = res;
         reject = rej;
@@ -1093,7 +1313,7 @@ export function dedupeInterceptor(options = {}) {
 
   const settle = (
     /** @type {unknown} */ ctx,
-    /** @type {(entry: { resolve: (r: HttpResponse) => void, reject: (e: unknown) => void }) => void} */ fn
+    /** @type {(entry: { resolve: (r: Outcome) => void, reject: (e: unknown) => void }) => void} */ fn
   ) => {
     const key = metaGet(ctx, META.dedupeKey);
     if (typeof key !== 'string') return;
@@ -1105,15 +1325,28 @@ export function dedupeInterceptor(options = {}) {
     fn(entry);
   };
 
+  /** Whether the leader's failure is the request's outcome (no retry can follow it). @param {unknown} err @param {unknown} ctx */
+  const isFinal = (err, ctx) => {
+    if (err instanceof AbortError) return false;
+    if (!isObjectLike(err) || /** @type {any} */ (err).retryable !== true) return true;
+    const c = isObjectLike(ctx) ? /** @type {any} */ (ctx) : {};
+    const retries = Number(isObjectLike(c.spec) ? c.spec.retries : NaN);
+    const attempt = Number(c.attempt);
+    return Number.isFinite(retries) && Number.isFinite(attempt) && attempt > retries;
+  };
+
   /** @type {ResponseInterceptor} */
   const response = (res, ctx) => {
     settle(ctx, (entry) => entry.resolve(/** @type {HttpResponse} */ (res)));
-    return res;
+    return undefined;
   };
 
   /** @type {ErrorInterceptor} */
   const error = (err, ctx) => {
-    settle(ctx, (entry) => entry.reject(err));
+    settle(ctx, (entry) => {
+      if (isFinal(err, ctx)) entry.reject(err);
+      else entry.resolve(DEDUPE_RELEASED);
+    });
     return undefined;
   };
 
@@ -1150,7 +1383,8 @@ export function csrfInterceptor(options) {
 /**
  * `X-Device-Id` from the host's `getDeviceId()` (sync or async). The first non‑empty id is kept for
  * the lifetime of the bundle and persisted under `deviceId` when `storage` is given (a stored id is
- * reused without calling the host); a failing / empty `getDeviceId()` just adds no header.
+ * reused without calling the host); concurrent first requests share one resolution, so the host is
+ * asked once; a failing / empty `getDeviceId()` just adds no header (and is asked again next time).
  * Effects: storage `deviceId`.
  * @param {{ getDeviceId: () => string | undefined | Promise<string | undefined>, header?: string, storage?: StorageLike, storageKey?: string }} options
  * @returns {InterceptorBundle}
@@ -1167,9 +1401,10 @@ export function deviceInterceptor(options) {
   const storage = isStorageLike(o.storage) ? o.storage : undefined;
   /** @type {string|undefined} */
   let cached;
+  /** The resolution concurrent first requests share. @type {Promise<string|undefined>|null} */
+  let resolving = null;
 
-  const resolve = async () => {
-    if (cached) return cached;
+  const lookup = async () => {
     if (storage) {
       const stored = str(safe(() => storage.get(storageKey)));
       if (stored) {
@@ -1182,6 +1417,17 @@ export function deviceInterceptor(options) {
     cached = id;
     if (storage) safe(() => storage.set(storageKey, id));
     return id;
+  };
+  const resolve = () => {
+    if (cached) return Promise.resolve(cached);
+    if (!resolving) {
+      const shared = lookup().finally(() => {
+        if (resolving === shared) resolving = null;
+      });
+      shared.catch(() => {}); // every awaiter handles its own rejection
+      resolving = shared;
+    }
+    return resolving;
   };
 
   /** @type {RequestInterceptor} */
@@ -1279,8 +1525,9 @@ export function telemetryInterceptor(options) {
 
 /**
  * Debug‑log every request, response and error through `logger.debug` (or `level`) with the values
- * of `redact`ed keys (case‑insensitive, deep, headers included) replaced by `[redacted]`. A throwing
- * logger never breaks the request. Effects: none.
+ * of `redact`ed keys replaced by `[redacted]` — deep, headers included, case‑insensitive, and a key
+ * that merely *contains* a redacted word (`cardNumber`, `x-authorization`) counts too, so a secret
+ * never leaks through a variant spelling. A throwing logger never breaks the request. Effects: none.
  * @param {{ logger: Record<string, Function>, redact?: string[], level?: 'debug'|'info'|'warn'|'error' }} options
  * @returns {InterceptorBundle}
  * @throws {ConfigError} when the logger lacks the level method or `redact` is not a string array
@@ -1296,9 +1543,13 @@ export function loggingInterceptor(options) {
   if (!Array.isArray(redact) || redact.some((k) => typeof k !== 'string')) {
     throw configError('loggingInterceptor', '`redact` must be an array of key names');
   }
-  const keys = new Set(redact.map((k) => k.toLowerCase()));
+  const words = redact.map((k) => k.toLowerCase()).filter((k) => k !== '');
+  const isSecret = (/** @type {string} */ key) => {
+    const lower = key.toLowerCase();
+    return words.some((w) => lower === w || lower.includes(w));
+  };
   const log = (/** @type {string} */ msg, /** @type {unknown} */ data) => {
-    safe(() => logger[level](msg, redactDeep(data, keys)));
+    safe(() => logger[level](msg, redactDeep(data, isSecret)));
   };
   const base = (/** @type {unknown} */ ctx) => {
     const c = isObjectLike(ctx) ? /** @type {any} */ (ctx) : {};
@@ -1446,6 +1697,22 @@ function hasStageApi(http) {
 }
 
 /**
+ * Whether `http` implements the docs §3.1 cache / dedupe stage itself (`createHttp` does): it then
+ * exposes the `http.cache` namespace and `http.inflight()` of docs §3, and the `cache` / `dedupe`
+ * bundles would only duplicate its work.
+ * @param {any} http
+ * @returns {boolean}
+ */
+function hasNativeCacheStage(http) {
+  return (
+    isObjectLike(http) &&
+    isObjectLike(http.cache) &&
+    typeof http.cache.invalidate === 'function' &&
+    typeof http.inflight === 'function'
+  );
+}
+
+/**
  * Register one bundle: stage by stage through `http.interceptors.<stage>.use(fn, { priority, name })`
  * when the client exposes it (exact per‑stage priorities), else through `http.use(bundle, opts)`.
  * @param {any} http
@@ -1473,10 +1740,14 @@ function register(http, b) {
  * cache(70) → dedupe(80) → logging(90) → telemetry(95); response envelope(10) → problem(20); error
  * problem(10) → auth(20) → rateLimit(30). Optional pieces are skipped when their dependency is
  * missing (`apiKey`, `store`, `getDeviceId`, `csrf.cookieName`, `auth`, `logger`, `telemetry`).
+ * `cache` and `dedupe` are skipped when `http` runs the §3.1 cache / dedupe stage itself (it
+ * exposes `http.cache.invalidate()` and `http.inflight()`, as `createHttp` does): installing the
+ * bundles on top would store every cacheable response twice under two key schemes and leave
+ * `http.cache.invalidate()` blind to the second copy. `deps.cache` / `deps.dedupe` force either way.
  * Returns an uninstall function carrying the installed `bundles`.
  * Effects: none (registration only).
- * @param {{ use?: Function, interceptors?: object }} http
- * @param {{ auth?: AuthLike, store?: { get: (path: string) => unknown }, storage?: StorageLike, apiKey?: string, logger?: Record<string, Function>, telemetry?: { track: Function }, getDeviceId?: () => unknown, csrf?: { cookieName: string, header?: string }, authExclude?: Array<RegExp|string>, cacheTtlMs?: number, problemMap?: Record<string, typeof ApiError | ((ctx: ProblemContext) => ApiError)>, timers?: TimersLike }} [deps]
+ * @param {{ use?: Function, interceptors?: object, cache?: object, inflight?: Function }} http
+ * @param {{ auth?: AuthLike, store?: { get: (path: string) => unknown }, storage?: StorageLike, apiKey?: string, logger?: Record<string, Function>, telemetry?: { track: Function }, getDeviceId?: () => unknown, csrf?: { cookieName: string, header?: string }, authExclude?: Array<RegExp|string>, cache?: boolean, dedupe?: boolean, cacheTtlMs?: number, problemMap?: Record<string, typeof ApiError | ((ctx: ProblemContext) => ApiError)> }} [deps]
  * @returns {(() => void) & { bundles: InterceptorBundle[] }}
  * @throws {ConfigError} when `http` exposes neither `use()` nor `interceptors.<stage>.use()`
  */
@@ -1503,8 +1774,11 @@ export function installDefaultInterceptors(http, deps = {}) {
     bundles.push(authInterceptor({ auth: d.auth, exclude: d.authExclude }));
   }
   bundles.push(idempotencyInterceptor());
-  bundles.push(cacheInterceptor({ storage: d.storage, defaultTtlMs: d.cacheTtlMs }));
-  bundles.push(dedupeInterceptor());
+  const native = hasNativeCacheStage(http);
+  if (d.cache === true || (d.cache !== false && !native)) {
+    bundles.push(cacheInterceptor({ storage: d.storage, defaultTtlMs: d.cacheTtlMs }));
+  }
+  if (d.dedupe === true || (d.dedupe !== false && !native)) bundles.push(dedupeInterceptor());
   if (isObjectLike(d.logger) && typeof d.logger.debug === 'function') {
     bundles.push(loggingInterceptor({ logger: d.logger }));
   }
@@ -1513,7 +1787,7 @@ export function installDefaultInterceptors(http, deps = {}) {
   }
   bundles.push(envelopeInterceptor());
   bundles.push(problemInterceptor({ map: d.problemMap }));
-  bundles.push(rateLimitInterceptor({ timers: d.timers }));
+  bundles.push(rateLimitInterceptor());
 
   const offs = bundles.map((b) => register(http, b));
   const uninstall = () => {

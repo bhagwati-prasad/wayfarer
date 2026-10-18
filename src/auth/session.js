@@ -7,16 +7,22 @@
  * through injectable timers, guest sessions, the guest → account claim flow, register, password /
  * OTP / provider / magic‑link login, MFA and logout. It registers the `session` slice with
  * `secret: true` so `store.snapshot()` never carries tokens, and resolves its paths through the
- * `endpoints` table (`auth.*` keys are seeded with the documented `/v1/auth/...` paths when the table
- * lacks them). STANDALONE: it imports only `errors` and `utils` and the `http` / `store` / `storage` /
+ * `endpoints` table (`core/endpoints.js` ships the `auth.*` rows; a hand‑built table that lacks them is
+ * seeded with the same documented `/v1/auth/...` paths). STANDALONE: it imports only `errors` and `utils` and the `http` / `store` / `storage` /
  * `events` instances it is given — never a domain module or `core/client.js`; modules receive it as
  * `ctx.auth`. SSR‑safe (no `window` / `document` / `localStorage`, timers looked up at call time), no
  * module‑level mutable state, no `console.*`, never throws a plain `Error`. Credential‑free calls
  * (login, register, refresh, OTP, claim, magic link, MFA, provider callback) are sent with
- * `{ auth: false }` so the `authInterceptor` never attaches a stale token to them.
+ * `{ auth: false }` so the `authInterceptor` never attaches a stale token to them. A session
+ * generation counter makes a refresh that was in flight when the session was cleared (`clearTokens`,
+ * `logout`, `destroy`, a rejected refresh) discard its result instead of re‑authenticating; a
+ * caller's `opts.signal` on the shared `refresh()` / `ensureGuestSession()` detaches only that caller
+ * (`AbortError`) and never kills the flight the other sharers wait on; timer delays are clamped to
+ * `2^31 − 1` ms (the platform fires anything longer immediately) and re‑evaluated on wake.
  */
 
 import {
+  AbortError,
   AuthError,
   ConfigError,
   SdkError,
@@ -41,8 +47,10 @@ import { isEmail, isPhone, schemas, validate } from '../utils/validation.js';
  * @typedef {Object} Tokens
  * @property {string} accessToken
  * @property {string|null} [refreshToken]  `undefined` keeps the current one, `null` drops it.
- * @property {DateTime|number|null} [expiresAt]  ISO‑8601 or epoch ms (`expiresIn` seconds also read from backend payloads).
- * @property {User|null} [user]
+ * @property {DateTime|number|null} [expiresAt]  ISO‑8601 or epoch ms (`expiresIn` seconds also read
+ *   from backend payloads). Omitted = unknown: `getExpiry()` is `null` and no proactive refresh is
+ *   scheduled (a previous token's expiry is never carried over to a new access token).
+ * @property {User|null} [user]  `undefined` keeps the current user, `null` drops it.
  */
 
 /** @typedef {'anonymous'|'guest'|'authenticated'|'refreshing'} SessionStatus */
@@ -179,6 +187,8 @@ const RESET_SLICES = Object.freeze([
 const DEFAULT_SKEW_MS = 30000;
 /** A refresh is never scheduled closer than this, so a tiny token lifetime cannot spin. */
 const MIN_REFRESH_DELAY_MS = 1000;
+/** Longest delay `setTimeout` honours; anything above fires after ~1 ms, which would spin a refresh. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const TOKEN_STORAGES = new Set(['memory', 'session', 'local']);
 const CLAIM_CHANNELS = Object.freeze(['email', 'sms', 'whatsapp']);
@@ -359,6 +369,60 @@ function isDefinitiveRefreshFailure(err) {
   return status >= 400 && status < 500 && !TRANSIENT_4XX.has(status);
 }
 
+/** @param {unknown} v @returns {v is AbortSignal} */
+function isSignalLike(v) {
+  if (!isObjectLike(v)) return false;
+  const s = /** @type {any} */ (v);
+  return typeof s.aborted === 'boolean' && isFn(s.addEventListener) && isFn(s.removeEventListener);
+}
+
+/**
+ * Split a caller's `signal` off its request options so a shared (single‑flight) request is never
+ * aborted by one of its sharers; the signal detaches that caller alone (see `withSignal`).
+ * @param {RequestOpts} [opts]
+ * @returns {{ opts: RequestOpts|undefined, signal: AbortSignal|undefined }}
+ */
+function detachSignal(opts) {
+  if (!isPlainObject(opts) || !isSignalLike(opts.signal)) return { opts, signal: undefined };
+  const { signal, ...rest } = opts;
+  return { opts: rest, signal };
+}
+
+/** @param {AbortSignal} signal @returns {AbortError} */
+function abortErrorFor(signal) {
+  const reason = /** @type {any} */ (signal).reason;
+  return new AbortError('Request aborted', {
+    reason: typeof reason === 'string' && reason ? reason : 'aborted',
+    cause: reason instanceof Error ? reason : undefined,
+  });
+}
+
+/**
+ * Settle like `promise`, or reject with `AbortError` as soon as `signal` aborts; the underlying work
+ * carries on for everybody else. The listener is removed once settled, so nothing leaks.
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {AbortSignal|undefined} signal
+ * @returns {Promise<T>}
+ */
+function withSignal(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortErrorFor(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 // ── factory ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -480,6 +544,11 @@ export function createAuth(options) {
   let guestToken = null;
   /** `loginWithPassword({ remember: false })` keeps the refresh token in memory for this session. */
   let remember = true;
+  /**
+   * Bumped whenever the authenticated identity is dropped. A refresh captures it before its request
+   * and discards a result that lands after the session it belonged to was cleared.
+   */
+  let generation = 0;
   /** @type {unknown} */
   let refreshTimer = null;
   let destroyed = false;
@@ -562,10 +631,15 @@ export function createAuth(options) {
     writeKey(tokenStorage(), KEYS.refreshToken, refreshToken);
   }
 
-  /** @param {number} [expiresAtMs] */
+  /**
+   * Persist the guest identity, bounded by the backend's expiry when it gave one. A guest that is
+   * already expired on arrival stays in memory only (a TTL of 0 would mean "never expires").
+   * @param {number} [expiresAtMs]
+   */
   function persistGuest(expiresAtMs) {
     const s = guestStorage();
-    const ttl = expiresAtMs !== undefined ? Math.max(0, expiresAtMs - now()) : undefined;
+    const ttl = expiresAtMs !== undefined ? expiresAtMs - now() : undefined;
+    if (ttl !== undefined && ttl <= 0) return;
     writeKey(s, KEYS.guestId, guestId, ttl);
     writeKey(s, KEYS.guestToken, guestToken, ttl);
   }
@@ -701,13 +775,23 @@ export function createAuth(options) {
     return strategy === 'cookie' || refreshToken !== null;
   }
 
-  /** @param {number} delayMs */
+  /**
+   * Arm the proactive refresh. The wait is clamped to `MAX_TIMER_MS`; on wake the remaining time to
+   * `expiresAt - skew` is re‑evaluated (clamped wait, clock jump) and the timer re‑armed when the
+   * moment has not come yet, so a long‑lived token never spins the refresh.
+   * @param {number} delayMs
+   */
   function armRefresh(delayMs) {
     clearRefreshTimer();
     if (destroyed || !canRefresh()) return;
-    const delay = Math.max(MIN_REFRESH_DELAY_MS, delayMs);
+    const delay = Math.min(MAX_TIMER_MS, Math.max(MIN_REFRESH_DELAY_MS, delayMs));
     const handle = timers.setTimeout(() => {
       refreshTimer = null;
+      const remaining = expiry ? expiry.ms - skewMs - now() : 0;
+      if (remaining > MIN_REFRESH_DELAY_MS) {
+        armRefresh(remaining);
+        return;
+      }
       refresh().catch((e) => log('debug', 'auth: scheduled refresh failed', { error: e }));
     }, delay);
     if (isObjectLike(handle) && isFn(/** @type {any} */ (handle).unref)) {
@@ -732,25 +816,53 @@ export function createAuth(options) {
   // ── token lifecycle ──
 
   /**
-   * @param {{ accessToken: string, refreshToken?: string|null, expiry?: { iso: string, ms: number } | null, user?: User|null, sessionId?: string|null }} tokens
+   * Replace the whole authenticated identity: every field is taken as given (`null` = none), so a
+   * fresh login never inherits the previous session's refresh token, expiry, user or server session
+   * id. Callers that mean to keep a value (a refresh that did not rotate the refresh token) pass the
+   * current one explicitly. Then persist, mirror the slice and (re)schedule the proactive refresh.
+   * @param {{ accessToken: string, refreshToken: string|null, expiry: { iso: string, ms: number } | null, user: User|null, sessionId: string|null }} tokens
    * @param {string} action
+   * @param {Partial<SessionState>} [patch]  Extra slice fields committed in the same change.
    */
-  function applyTokens(tokens, action) {
+  function applyTokens(tokens, action, patch) {
     accessToken = tokens.accessToken;
-    if (tokens.refreshToken !== undefined) refreshToken = tokens.refreshToken;
-    if (tokens.expiry !== undefined) expiry = tokens.expiry;
-    if (tokens.user !== undefined) user = tokens.user;
-    if (tokens.sessionId !== undefined && tokens.sessionId !== null) sessionId = tokens.sessionId;
+    refreshToken = tokens.refreshToken;
+    expiry = tokens.expiry;
+    user = tokens.user;
+    sessionId = tokens.sessionId;
     persistRefreshToken();
     setSession(
-      { status: 'authenticated', user, guestId, accessExpiresAt: expiry ? expiry.iso : null },
+      {
+        status: 'authenticated',
+        user,
+        guestId,
+        accessExpiresAt: expiry ? expiry.iso : null,
+        ...(patch || {}),
+      },
       action
     );
     scheduleRefresh();
   }
 
+  /**
+   * Tokens read from a login / claim payload, completed for `applyTokens`: anything the backend left
+   * out is absent (`null`), never carried over from the previous session.
+   * @param {NonNullable<ReturnType<typeof readTokens>>} t
+   * @returns {{ accessToken: string, refreshToken: string|null, expiry: { iso: string, ms: number } | null, user: User|null, sessionId: string|null }}
+   */
+  function freshTokens(t) {
+    return {
+      accessToken: t.accessToken,
+      refreshToken: t.refreshToken === undefined ? null : t.refreshToken,
+      expiry: t.expiry,
+      user: t.user === undefined ? null : t.user,
+      sessionId: t.sessionId === undefined ? null : t.sessionId,
+    };
+  }
+
   /** Forget the authenticated identity (closure + persisted refresh token + timer). */
   function dropTokens() {
+    generation += 1;
     accessToken = null;
     refreshToken = null;
     expiry = null;
@@ -792,13 +904,15 @@ export function createAuth(options) {
   }
 
   /**
-   * Finish any login: apply the tokens, mirror the user into `account`, emit `auth:login`.
+   * Finish any login: apply the tokens as a fresh identity, mirror the user into `account`, emit
+   * `auth:login`. `rememberTokens: false` keeps this login's refresh token out of storage.
    * @param {unknown} data
    * @param {string} method
    * @param {string} action
+   * @param {{ rememberTokens?: boolean, patch?: Partial<SessionState> }} [extra]
    * @returns {User}
    */
-  function completeLogin(data, method, action) {
+  function completeLogin(data, method, action, extra) {
     const tokens = readTokens(data, now());
     if (!tokens) {
       throw new AuthError('The backend returned no access token', {
@@ -806,7 +920,8 @@ export function createAuth(options) {
         details: { method },
       });
     }
-    applyTokens(tokens, action);
+    remember = !(extra && extra.rememberTokens === false);
+    applyTokens(freshTokens(tokens), action, extra && extra.patch);
     setAccountUser(user);
     emit('auth:login', { user, method });
     return /** @type {User} */ (user);
@@ -872,12 +987,17 @@ export function createAuth(options) {
       'user must be an object'
     );
     assertValid('tokens', issues);
+    // Host‑owned tokens are always persisted per `tokenStorage`; an earlier `remember: false` login
+    // must not decide for them. `refreshToken` / `user` omitted keep the current ones, `expiresAt`
+    // omitted means the new token's expiry is unknown.
+    remember = true;
     applyTokens(
       {
         accessToken: /** @type {string} */ (t.accessToken),
-        refreshToken: t.refreshToken === undefined ? undefined : str(t.refreshToken) || null,
-        expiry: t.expiresAt === undefined ? undefined : exp,
-        user: t.user === undefined ? undefined : /** @type {User|null} */ (t.user),
+        refreshToken: t.refreshToken === undefined ? refreshToken : str(t.refreshToken) || null,
+        expiry: exp,
+        user: t.user === undefined ? user : /** @type {User|null} */ (t.user),
+        sessionId,
       },
       'session/setTokens'
     );
@@ -905,6 +1025,13 @@ export function createAuth(options) {
       if (accessToken) expire('no_refresh_token', err);
       throw err;
     }
+    const gen = generation;
+    /** The session this refresh belonged to was cleared meanwhile: its outcome is void. */
+    const stale = () =>
+      new AuthError('Session was cleared while refreshing', {
+        reason: 'expired',
+        details: { superseded: true },
+      });
     setSession({ status: 'refreshing' }, 'session/refresh');
     let data;
     try {
@@ -914,6 +1041,7 @@ export function createAuth(options) {
         auth: false,
       });
     } catch (e) {
+      if (gen !== generation) throw stale();
       const err = isSdkError(e) ? e : wrap(e);
       if (isDefinitiveRefreshFailure(err)) {
         expire('refresh_rejected', err);
@@ -928,20 +1056,37 @@ export function createAuth(options) {
       setSession({ status: restingStatus() }, 'session/refreshFailed');
       throw err;
     }
+    if (gen !== generation) throw stale();
     const tokens = readTokens(data, now());
     if (!tokens) {
       const err = new AuthError('Refresh response carried no access token', { reason: 'expired' });
       expire('refresh_invalid', err);
       throw err;
     }
-    applyTokens(tokens, 'session/refreshed');
+    // A refresh that did not rotate a value keeps the current one.
+    applyTokens(
+      {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken === undefined ? refreshToken : tokens.refreshToken,
+        expiry: tokens.expiry,
+        user: tokens.user === undefined ? user : tokens.user,
+        sessionId: tokens.sessionId === undefined ? sessionId : tokens.sessionId,
+      },
+      'session/refreshed'
+    );
     if (tokens.user) setAccountUser(tokens.user);
     emit('auth:refreshed', { expiresAt: expiry ? expiry.iso : null, user });
     return publicTokens();
   }
 
+  const sharedRefresh = singleFlight(null, doRefresh);
+
   /** @type {Auth['refresh']} */
-  const refresh = singleFlight(null, doRefresh);
+  function refresh(opts) {
+    const split = detachSignal(opts);
+    if (split.signal && split.signal.aborted) return Promise.reject(abortErrorFor(split.signal));
+    return withSignal(sharedRefresh(split.opts), split.signal);
+  }
 
   // ── guest sessions (single‑flight) ──
 
@@ -975,8 +1120,14 @@ export function createAuth(options) {
     return { guestId, guestToken };
   }
 
+  const sharedEnsureGuestSession = singleFlight(null, doEnsureGuestSession);
+
   /** @type {Auth['ensureGuestSession']} */
-  const ensureGuestSession = singleFlight(null, doEnsureGuestSession);
+  function ensureGuestSession(opts) {
+    const split = detachSignal(opts);
+    if (split.signal && split.signal.aborted) return Promise.reject(abortErrorFor(split.signal));
+    return withSignal(sharedEnsureGuestSession(split.opts), split.signal);
+  }
 
   // ── claim flow ──
 
@@ -1088,8 +1239,8 @@ export function createAuth(options) {
       });
     }
     dropGuest();
-    applyTokens(tokens, 'session/claimed');
-    setSession({ claim: null }, 'session/claimed');
+    remember = true;
+    applyTokens(freshTokens(tokens), 'session/claimed', { claim: null });
     setAccountUser(user);
     emit('auth:claimed', { user });
     emit('auth:login', { user, method: 'claim' });
@@ -1215,8 +1366,9 @@ export function createAuth(options) {
     ) {
       throw mfaRequired(d);
     }
-    remember = i.remember !== false;
-    return completeLogin(data, 'password', 'session/login');
+    return completeLogin(data, 'password', 'session/login', {
+      rememberTokens: i.remember !== false,
+    });
   }
 
   /** @type {Auth['requestOtp']} */
@@ -1284,8 +1436,7 @@ export function createAuth(options) {
     if (!readTokens(d, now()) && (d.requires === 'register' || d.registered === false)) {
       return { challengeId: str(d.challengeId) || i.challengeId, requires: 'register' };
     }
-    remember = i.remember !== false;
-    return completeLogin(data, 'otp', 'session/login');
+    return completeLogin(data, 'otp', 'session/login', { rememberTokens: i.remember !== false });
   }
 
   /** @type {Auth['getProviderUrl']} */
@@ -1304,12 +1455,10 @@ export function createAuth(options) {
     );
     assertValid('provider URL request', issues);
     const query = compact({ redirectUri: i.redirectUri, state: i.state });
+    const o = isPlainObject(opts) ? opts : {};
     const data = await call('auth.getProviderUrl', {
       params: { provider: String(provider) },
-      opts: {
-        ...(isPlainObject(opts) ? opts : {}),
-        query: { ...((opts && opts.query) || {}), ...query },
-      },
+      opts: { ...o, query: { ...(isPlainObject(o.query) ? o.query : {}), ...query } },
       auth: false,
     });
     const url =
@@ -1425,13 +1574,10 @@ export function createAuth(options) {
       });
     }
     const everywhere = i.everywhere === true;
-    if (accessToken !== null) {
-      try {
-        await call('auth.logout', { body: { everywhere }, opts });
-      } catch (e) {
-        log('debug', 'auth: logout request failed (ignored)', { error: e });
-      }
-    }
+    // Local first: the session is gone the moment `logout()` is called, whatever the network does.
+    // The bearer is captured for the best‑effort server call, which is sent credential‑free with
+    // that header so the `authInterceptor` cannot refresh‑and‑retry a session we just dropped.
+    const bearer = accessToken;
     dropTokens();
     dropGuest();
     if (isFn(http.abort)) {
@@ -1455,6 +1601,24 @@ export function createAuth(options) {
     if (isFn(store.batch)) store.batch(resetAll);
     else resetAll();
     emit('auth:logout', { reason: 'logout', everywhere });
+    if (bearer !== null) {
+      const o = isPlainObject(opts) ? opts : {};
+      try {
+        await call('auth.logout', {
+          body: { everywhere },
+          opts: {
+            ...o,
+            headers: {
+              ...(isPlainObject(o.headers) ? o.headers : {}),
+              Authorization: `Bearer ${bearer}`,
+            },
+          },
+          auth: false,
+        });
+      } catch (e) {
+        log('debug', 'auth: logout request failed (ignored)', { error: e });
+      }
+    }
   }
 
   // ── subscriptions / lifecycle ──
@@ -1484,6 +1648,8 @@ export function createAuth(options) {
   /** @type {Auth['destroy']} */
   function destroy() {
     destroyed = true;
+    // Any refresh still in flight finds its generation gone and discards its result.
+    generation += 1;
     clearRefreshTimer();
     for (const release of [...offs]) release();
     offs.clear();

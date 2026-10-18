@@ -3,10 +3,12 @@
  * (exponential backoff), `poll` (honours `{ retryAfterMs }`), `withTimeout`, `sleep`, `deferred`,
  * `combineSignals`, `timeoutSignal`, `isAbort`, `createQueue`, `onceAsync` and `memoAsync`. Everything is
  * pure apart from the timers it starts, and every timer is cleared by the matching `cancel()` / abort /
- * settle, so nothing lingers after `destroy()`. SSR‑safe: only the `setTimeout` / `clearTimeout` /
- * `AbortController` / `Date` globals are used, never `window`, `document` or storage; no module‑level
- * mutable state; no logging. Rejections are always `SdkError` subclasses from `../errors/index.js`
- * (`AbortError`, `TimeoutError`, `ValidationError`); errors thrown by user callbacks pass through untouched.
+ * settle, so nothing lingers after `destroy()`. Timer delays are clamped to `2^31 − 1` ms because the
+ * platform silently turns anything larger into ~1 ms. SSR‑safe: only the `setTimeout` / `clearTimeout` /
+ * `AbortController` / `AbortSignal` / `Date` globals are used, never `window`, `document` or storage; no
+ * module‑level mutable state; no logging. Rejections are always `SdkError` subclasses from
+ * `../errors/index.js` (`AbortError`, `TimeoutError`, `ValidationError`); errors thrown by user callbacks
+ * pass through untouched, and nothing that returns a promise ever throws synchronously at call time.
  */
 
 import { AbortError, TimeoutError, ValidationError, isSdkError } from '../errors/index.js';
@@ -63,7 +65,8 @@ import { AbortError, TimeoutError, ValidationError, isSdkError } from '../errors
  * @property {number} [maxMs]                  Reject with `TimeoutError` once this much time has elapsed.
  * @property {AbortSignal} [signal]            Abort (rejects with `AbortError`).
  * @property {(result: any, info: { attempt: number, elapsedMs: number, nextDelayMs: number | null }) => void} [onTick]
- *   Observer called after every attempt.
+ *   Observer called after every attempt; `nextDelayMs` is `null` when no further attempt follows (done,
+ *   or `maxAttempts` reached).
  */
 
 /**
@@ -92,6 +95,22 @@ import { AbortError, TimeoutError, ValidationError, isSdkError } from '../errors
  */
 
 // ── internal helpers ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Largest delay `setTimeout` honours (2^31 − 1 ms ≈ 24.8 days). Node and browsers coerce the delay to a
+ * signed 32‑bit integer, so anything larger fires after ~1 ms instead of later.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * `setTimeout` with the delay clamped to `[0, MAX_TIMER_MS]`.
+ * @param {() => void} fnc
+ * @param {number} ms
+ * @returns {ReturnType<typeof setTimeout>}
+ */
+function setTimer(fnc, ms) {
+  return setTimeout(fnc, Math.min(Math.max(0, ms), MAX_TIMER_MS));
+}
 
 /**
  * @param {string} path
@@ -152,6 +171,37 @@ function requireInt(value, path, fallback, min = 1) {
 }
 
 /**
+ * Whether `value` can be consumed as an `AbortSignal` (duck‑typed so signals from another realm, e.g. a
+ * jsdom window, are accepted).
+ * @param {unknown} value
+ * @returns {value is AbortSignal}
+ */
+function isSignalLike(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const s =
+    /** @type {{ aborted?: unknown, addEventListener?: unknown, removeEventListener?: unknown }} */ (
+      value
+    );
+  return (
+    typeof s.aborted === 'boolean' &&
+    typeof s.addEventListener === 'function' &&
+    typeof s.removeEventListener === 'function'
+  );
+}
+
+/**
+ * Optional `AbortSignal`: `undefined` / `null` mean none, anything else must be signal‑like.
+ * @param {unknown} value
+ * @param {string} path
+ * @returns {AbortSignal|undefined}
+ */
+function requireSignal(value, path) {
+  if (value === undefined || value === null) return undefined;
+  if (!isSignalLike(value)) throw invalid(path, 'type', `${path} must be an AbortSignal`);
+  return value;
+}
+
+/**
  * Finite non‑negative `retryAfterMs` carried by a value, or `undefined`.
  * @param {unknown} value
  * @returns {number|undefined}
@@ -191,20 +241,54 @@ function start(fn) {
 }
 
 /**
- * Default cache key for `singleFlight` / `memoAsync`: primitives as strings, everything else JSON.
- * @param {unknown[]} args
+ * Mark a caller‑supplied promise as consumed when we settle without it, so its own rejection never
+ * surfaces as an unhandled rejection. Non‑thenables are ignored.
+ * @param {unknown} value
+ */
+function consume(value) {
+  if (value && typeof (/** @type {any} */ (value).then) === 'function') {
+    /** @type {Promise<unknown>} */ (value).then(undefined, () => {});
+  }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isPrimitive(value) {
+  return value === null || (typeof value !== 'object' && typeof value !== 'function');
+}
+
+/**
+ * One argument of a serialised cache key: type‑tagged so `1`, `'1'`, `null` and `undefined` stay apart;
+ * objects by their JSON (`String()` when not serialisable).
+ * @param {unknown} value
  * @returns {string}
  */
+function keyPart(value) {
+  if (value === null) return 'null';
+  const type = typeof value;
+  if (type === 'object') {
+    try {
+      return `object:${JSON.stringify(value)}`;
+    } catch {
+      return `object:${String(value)}`;
+    }
+  }
+  return `${type}:${String(value)}`;
+}
+
+/**
+ * Default cache key for `memoAsync`. A single primitive argument is the key itself (so `has('a')` works
+ * and, since `Map` keys keep their type, `1` and `'1'` never collide); no arguments key as `undefined`;
+ * anything else is serialised with every argument type‑tagged.
+ * @param {unknown[]} args
+ * @returns {unknown}
+ */
 function defaultKey(args) {
-  if (args.length === 0) return '';
-  if (args.length === 1 && (typeof args[0] === 'string' || typeof args[0] === 'number')) {
-    return String(args[0]);
-  }
-  try {
-    return JSON.stringify(args);
-  } catch {
-    return String(args);
-  }
+  if (args.length === 0) return undefined;
+  if (args.length === 1 && isPrimitive(args[0])) return args[0];
+  return `\u0000${args.map(keyPart).join('\u001f')}`;
 }
 
 /**
@@ -318,13 +402,13 @@ export function debounce(fn, ms, options = {}) {
     pendingArgs = args;
     pendingThis = this;
     clearTrailing();
-    timer = setTimeout(onTrailing, wait);
+    timer = setTimer(onTrailing, wait);
     if (isLeadingEdge) {
       lastInvokeTime = now;
       if (leading) invoke(now);
     }
     if (maxWait !== undefined && maxTimer === null && pendingArgs !== null) {
-      maxTimer = setTimeout(onMax, Math.max(0, maxWait - (now - lastInvokeTime)));
+      maxTimer = setTimer(onMax, maxWait - (now - lastInvokeTime));
     }
     return result;
   }
@@ -368,8 +452,8 @@ export function throttle(fn, ms) {
 /**
  * Share one in‑flight promise per key: while a call for `keyFn(...args)` is pending, further calls with
  * the same key return the same promise instead of invoking `fn` again. A `null` `keyFn` shares a single
- * key. The entry is released as soon as the promise settles. Effects: none.
- * Throws `ValidationError` for a non‑function `fn`.
+ * key. The entry is released as soon as the promise settles. A throwing `keyFn` rejects (never throws).
+ * Effects: none. Throws `ValidationError` for a non‑function `fn` / `keyFn`.
  * @template {(...args: any[]) => any} F
  * @param {((...args: Parameters<F>) => unknown) | null | undefined} keyFn
  * @param {F} fn
@@ -383,7 +467,13 @@ export function singleFlight(keyFn, fn) {
 
   /** @this {unknown} */
   return function shared(...args) {
-    const key = keyFn ? keyFn(...args) : '';
+    /** @type {unknown} */
+    let key;
+    try {
+      key = keyFn ? keyFn(...args) : '';
+    } catch (err) {
+      return Promise.reject(err);
+    }
     const existing = inflight.get(key);
     if (existing) return existing;
     // `start` runs `fn` synchronously but settles asynchronously, so the entry is stored before the
@@ -399,9 +489,10 @@ export function singleFlight(keyFn, fn) {
 /**
  * Run `fn(attempt, { signal })` until it resolves, retrying failures with exponential backoff
  * (`baseMs · factor^(attempt-1)` capped at `maxMs`, randomised by `jitter`). An error carrying a numeric
- * `retryAfterMs` (`RateLimitError`) waits exactly that long (capped at `maxMs`, no jitter). `retryOn(err,
- * attempt)` decides whether to retry, `onRetry(err, attempt, delayMs)` observes each wait, and `signal`
- * aborts the whole operation. Rejects with the last error, or with `AbortError` when aborted.
+ * `retryAfterMs` (`RateLimitError`) waits exactly that long (capped at `maxMs`, no jitter). Every delay is
+ * further clamped to `2^31 − 1` ms. `retryOn(err, attempt)` decides whether to retry, `onRetry(err,
+ * attempt, delayMs)` observes each wait, and `signal` aborts the whole operation. Rejects with the last
+ * error, or with `AbortError` when aborted; invalid options reject with `ValidationError`.
  * Effects: timer.
  * @template T
  * @param {(attempt: number, ctx: { signal?: AbortSignal }) => T | Promise<T>} fn
@@ -418,10 +509,24 @@ export async function retry(fn, options = {}) {
   if (!Number.isFinite(factor) || factor < 1) {
     throw invalid('factor', 'range', 'factor must be a number ≥ 1');
   }
+  const jitter = o.jitter === undefined || o.jitter === null ? true : o.jitter;
+  if (
+    typeof jitter !== 'boolean' &&
+    typeof jitter !== 'function' &&
+    jitter !== 'full' &&
+    jitter !== 'equal' &&
+    jitter !== 'none'
+  ) {
+    throw invalid(
+      'jitter',
+      'type',
+      "jitter must be a boolean, 'full', 'equal', 'none' or a function"
+    );
+  }
   const retryOn = o.retryOn === undefined || o.retryOn === null ? defaultRetryOn : o.retryOn;
   requireFn(retryOn, 'retryOn');
   if (o.onRetry !== undefined && o.onRetry !== null) requireFn(o.onRetry, 'onRetry');
-  const signal = o.signal || undefined;
+  const signal = requireSignal(o.signal, 'signal');
 
   let attempt = 0;
   for (;;) {
@@ -434,10 +539,11 @@ export async function retry(fn, options = {}) {
       if (attempt > retries) throw err;
       if (!(await retryOn(err, attempt))) throw err;
       const retryAfter = retryAfterOf(err);
-      const delay =
+      const raw =
         retryAfter !== undefined
           ? Math.min(maxMs, retryAfter)
-          : applyJitter(o.jitter, Math.min(maxMs, baseMs * factor ** (attempt - 1)), attempt);
+          : applyJitter(jitter, Math.min(maxMs, baseMs * factor ** (attempt - 1)), attempt);
+      const delay = Math.min(raw, MAX_TIMER_MS);
       if (o.onRetry) o.onRetry(err, attempt, delay);
       await sleep(delay, signal);
     }
@@ -449,11 +555,12 @@ export async function retry(fn, options = {}) {
 /**
  * Call `fn(attempt, { signal })` every `intervalMs` until `until(result, attempt)` is truthy, then resolve
  * with that result. When a result carries `{ retryAfterMs }` (the backend's `Retry-After`) that delay is
- * used instead of the interval; `backoff` grows the interval exponentially (capped by `maxIntervalMs`).
- * `maxAttempts` / `maxMs` reject with `TimeoutError` (`code: 'POLL_EXHAUSTED'` / `'TIMEOUT'`, the last
- * result on `details.last`); `signal` or the returned promise's `.cancel()` reject with `AbortError`.
- * Errors thrown by `fn` reject immediately. The inner `signal` handed to `fn` aborts on cancel, abort
- * and deadline. Effects: timer (always cleared on settle).
+ * used instead of the interval; `backoff` grows the interval exponentially (capped by `maxIntervalMs`, and
+ * always by `2^31 − 1` ms). `maxAttempts` / `maxMs` reject with `TimeoutError` (`code: 'POLL_EXHAUSTED'` /
+ * `'TIMEOUT'`, the last result on `details.last`); `signal` or the returned promise's `.cancel()` reject
+ * with `AbortError`; invalid options reject with `ValidationError`. Errors thrown by `fn` reject
+ * immediately. The inner `signal` handed to `fn` aborts on cancel, abort and deadline. Effects: timer
+ * (always cleared on settle).
  * @template T
  * @param {(attempt: number, ctx: { signal: AbortSignal }) => T | Promise<T>} fn
  * @param {PollOptions} options
@@ -503,7 +610,7 @@ export function poll(fn, options) {
     const backoff =
       o.backoff === true
         ? 2
-        : o.backoff === undefined || o.backoff === false
+        : o.backoff === undefined || o.backoff === null || o.backoff === false
           ? 1
           : Number(o.backoff);
     if (!Number.isFinite(backoff) || backoff < 1) {
@@ -516,7 +623,7 @@ export function poll(fn, options) {
       until: /** @type {PollOptions['until']} */ (requireFn(o.until, 'until')),
       maxAttempts: requireInt(o.maxAttempts, 'maxAttempts', Infinity),
       maxMs: requireMs(o.maxMs, 'maxMs', Infinity, { allowInfinity: true }),
-      signal: o.signal || undefined,
+      signal: requireSignal(o.signal, 'signal'),
       onTick: o.onTick === undefined || o.onTick === null ? undefined : o.onTick,
     };
     if (opts.onTick) requireFn(opts.onTick, 'onTick');
@@ -548,7 +655,7 @@ export function poll(fn, options) {
   }
 
   if (opts.maxMs !== Infinity) {
-    deadlineTimer = setTimeout(() => {
+    deadlineTimer = setTimer(() => {
       deadlineTimer = null;
       const err = new TimeoutError(`Polling exceeded ${opts.maxMs} ms`, {
         timeoutMs: opts.maxMs,
@@ -557,7 +664,7 @@ export function poll(fn, options) {
       controller.abort(err);
       fail(err);
       if (wake) wake();
-    }, opts.maxMs);
+    }, /** @type {number} */ (opts.maxMs));
   }
 
   /** @param {number} ms @returns {Promise<void>} */
@@ -569,7 +676,7 @@ export function poll(fn, options) {
         wake = null;
         resolve();
       };
-      waitTimer = setTimeout(wake, ms);
+      waitTimer = setTimer(wake, ms);
     });
 
   (async () => {
@@ -591,15 +698,16 @@ export function poll(fn, options) {
         fail(err);
         return;
       }
+      const exhausted = !finished && attempt >= /** @type {number} */ (opts.maxAttempts);
       /** @type {number|null} */
       let nextDelayMs = null;
-      if (!finished) {
+      if (!finished && !exhausted) {
         const retryAfter = retryAfterOf(result);
         const base =
           retryAfter !== undefined
             ? retryAfter
             : opts.intervalMs * /** @type {number} */ (opts.backoff) ** (attempt - 1);
-        nextDelayMs = Math.min(base, /** @type {number} */ (opts.maxIntervalMs));
+        nextDelayMs = Math.min(base, /** @type {number} */ (opts.maxIntervalMs), MAX_TIMER_MS);
       }
       if (opts.onTick) {
         try {
@@ -613,7 +721,7 @@ export function poll(fn, options) {
         settle(() => done.resolve(result));
         return;
       }
-      if (attempt >= /** @type {number} */ (opts.maxAttempts)) {
+      if (exhausted) {
         const err = new TimeoutError(`Polling gave up after ${attempt} attempts`, {
           code: 'POLL_EXHAUSTED',
           details: { attempts: attempt, last: result },
@@ -635,7 +743,9 @@ export function poll(fn, options) {
  * Settle with `promise` unless `ms` elapse first (`TimeoutError{ timeoutMs }`) or `signal` aborts
  * (`AbortError`). `promise` may be a function `(signal) => Promise` that receives a signal aborted on
  * timeout / abort so the underlying work can stop. `Infinity` disables the timer. The timer and the
- * abort listener are released as soon as the race settles. Effects: timer.
+ * abort listener are released as soon as the race settles; when the race is lost, `promise`'s own
+ * rejection is swallowed (never unhandled). Invalid arguments reject with `ValidationError`.
+ * Effects: timer.
  * @template T
  * @param {Promise<T> | ((signal: AbortSignal) => T | Promise<T>)} promise
  * @param {number} ms
@@ -647,15 +757,15 @@ export function withTimeout(promise, ms, signal) {
     let timeout;
     try {
       timeout = requireMs(ms, 'ms', undefined, { allowInfinity: true });
+      signal = requireSignal(signal, 'signal');
     } catch (err) {
       // The caller's promise is considered consumed: keep its rejection from going unhandled.
-      if (promise && typeof (/** @type {any} */ (promise).then) === 'function') {
-        /** @type {Promise<unknown>} */ (promise).then(undefined, () => {});
-      }
+      consume(promise);
       reject(err);
       return;
     }
     if (signal?.aborted) {
+      consume(promise);
       reject(abortErrorFrom(signal));
       return;
     }
@@ -678,7 +788,7 @@ export function withTimeout(promise, ms, signal) {
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     if (timeout !== Infinity) {
-      timer = setTimeout(() => {
+      timer = setTimer(() => {
         timer = null;
         const err = new TimeoutError(`Timed out after ${timeout} ms`, { timeoutMs: timeout });
         finish(() => reject(err), err);
@@ -697,7 +807,8 @@ export function withTimeout(promise, ms, signal) {
 
 /**
  * Resolve after `ms` milliseconds; reject with `AbortError` as soon as `signal` aborts (immediately when it
- * already is). `Infinity` waits for the signal alone. The timer is cleared on abort. Effects: timer.
+ * already is). `Infinity` waits for the signal alone; delays above `2^31 − 1` ms are clamped to that
+ * maximum. The timer is cleared on abort. Invalid arguments reject with `ValidationError`. Effects: timer.
  * @param {number} ms
  * @param {AbortSignal} [signal]
  * @returns {Promise<void>}
@@ -707,6 +818,7 @@ export function sleep(ms, signal) {
     let delay;
     try {
       delay = requireMs(ms, 'ms', undefined, { allowInfinity: true });
+      signal = requireSignal(signal, 'signal');
     } catch (err) {
       reject(err);
       return;
@@ -724,7 +836,7 @@ export function sleep(ms, signal) {
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     if (delay !== Infinity) {
-      timer = setTimeout(() => {
+      timer = setTimer(() => {
         timer = null;
         if (signal) signal.removeEventListener('abort', onAbort);
         resolve();
@@ -775,8 +887,8 @@ export function deferred() {
  * One signal that aborts (with the same `reason`) as soon as any input aborts. `null` / `undefined`
  * inputs are skipped; an already‑aborted input yields an already‑aborted signal; a single input is
  * returned as is; no inputs yield a signal that never aborts. Uses `AbortSignal.any` when the runtime
- * has it (no listener leak), otherwise one‑shot listeners that are removed on the first abort.
- * Effects: none.
+ * has it and every input is a native `AbortSignal` (no listener leak), otherwise one‑shot listeners that
+ * are removed on the first abort. Throws `ValidationError` for a non‑signal input. Effects: none.
  * @param {...(AbortSignal|null|undefined)} signals
  * @returns {AbortSignal}
  */
@@ -785,7 +897,7 @@ export function combineSignals(...signals) {
   const list = [];
   for (const s of signals) {
     if (s === null || s === undefined) continue;
-    if (typeof s !== 'object' || typeof s.aborted !== 'boolean') {
+    if (!isSignalLike(s)) {
       throw invalid('signals', 'type', 'combineSignals accepts AbortSignal instances only');
     }
     list.push(s);
@@ -800,7 +912,9 @@ export function combineSignals(...signals) {
     }
   }
   const any = /** @type {any} */ (AbortSignal).any;
-  if (typeof any === 'function') return any.call(AbortSignal, list);
+  if (typeof any === 'function' && list.every((s) => s instanceof AbortSignal)) {
+    return any.call(AbortSignal, list);
+  }
   const onAbort = function (/** @type {Event} */ event) {
     for (const s of list) s.removeEventListener('abort', onAbort);
     controller.abort(/** @type {AbortSignal} */ (event.target).reason);
@@ -811,15 +925,17 @@ export function combineSignals(...signals) {
 
 /**
  * A signal that aborts after `ms` with a `TimeoutError{ timeoutMs }` reason, so consumers (`sleep`,
- * `withTimeout`, `poll`, `http`) reject with that `TimeoutError`. Unlike `AbortSignal.timeout` it uses the
- * global `setTimeout` (fake‑timer friendly) and never keeps a Node process alive. Effects: timer.
+ * `withTimeout`, `poll`, `http`) reject with that `TimeoutError`. `Infinity` yields a signal that never
+ * aborts (no timer). Unlike `AbortSignal.timeout` it uses the global `setTimeout` (fake‑timer friendly)
+ * and never keeps a Node process alive. Throws `ValidationError` for an invalid `ms`. Effects: timer.
  * @param {number} ms
  * @returns {AbortSignal}
  */
 export function timeoutSignal(ms) {
-  const delay = requireMs(ms, 'ms');
+  const delay = requireMs(ms, 'ms', undefined, { allowInfinity: true });
   const controller = new AbortController();
-  const timer = setTimeout(() => {
+  if (delay === Infinity) return controller.signal;
+  const timer = setTimer(() => {
     controller.abort(new TimeoutError(`Timed out after ${delay} ms`, { timeoutMs: delay }));
   }, delay);
   if (timer && typeof (/** @type {any} */ (timer).unref) === 'function') {
@@ -829,8 +945,8 @@ export function timeoutSignal(ms) {
 }
 
 /**
- * Whether `e` denotes an abort: the SDK `AbortError`, a DOMException / Error named `AbortError`, or
- * anything with `code: 'ABORTED'`. Effects: none.
+ * Whether `e` denotes an abort: the SDK `AbortError` (any copy, via `code: 'ABORTED'`) or a DOMException /
+ * Error named `AbortError`. Effects: none.
  * @param {unknown} e
  * @returns {boolean}
  */
@@ -838,7 +954,7 @@ export function isAbort(e) {
   if (e === null || typeof e !== 'object') return false;
   if (e instanceof AbortError) return true;
   const err = /** @type {{ name?: unknown, code?: unknown }} */ (e);
-  return err.name === 'AbortError' || err.code === 'ABORTED' || err.code === 20;
+  return err.name === 'AbortError' || err.code === 'ABORTED';
 }
 
 // ── queue ────────────────────────────────────────────────────────────────────────────────────────
@@ -847,7 +963,8 @@ export function isAbort(e) {
  * A FIFO task queue running at most `concurrency` tasks at once (default 1 = serial). `add(fn, { signal })`
  * resolves with the task's result; aborting the signal while the task is still waiting rejects it with
  * `AbortError` without running it. `size` counts waiting tasks, `pending` running ones, `onIdle()` resolves
- * once both are zero, `clear()` rejects every waiting task. Effects: none.
+ * once both are zero, `clear()` rejects every waiting task. Throws `ValidationError` for an invalid
+ * `concurrency`; `add` rejects with it for a non‑function task or a non‑signal `signal`. Effects: none.
  * @param {{ concurrency?: number }} [options]
  * @returns {Queue}
  */
@@ -872,10 +989,12 @@ export function createQueue(options = {}) {
 
   /** @type {Queue['add']} */
   function add(fn, opts = {}) {
-    const signal = opts?.signal || undefined;
     return new Promise((resolve, reject) => {
+      /** @type {AbortSignal|undefined} */
+      let signal;
       try {
         requireFn(fn, 'fn');
+        signal = requireSignal(opts?.signal, 'signal');
       } catch (err) {
         reject(err);
         return;
@@ -973,10 +1092,12 @@ export function onceAsync(fn) {
 }
 
 /**
- * Memoise an async function by `keyFn(...args)` (default: the arguments) for `ttlMs` after it resolves
+ * Memoise an async function by `keyFn(...args)` (default: a single primitive argument as is, otherwise
+ * the type‑tagged serialised arguments, so `1` and `'1'` never collide) for `ttlMs` after it resolves
  * (default: forever). Concurrent calls for the same key share the in‑flight promise; rejections are never
- * cached. Exposes `.clear()`, `.delete(key)` and `.has(key)`. Effects: none.
- * Throws `ValidationError` for invalid arguments.
+ * cached; expired entries are swept on the next miss so the cache never grows with stale keys. A throwing
+ * `keyFn` rejects (never throws). Exposes `.clear()`, `.delete(key)` and `.has(key)` (true while in
+ * flight or fresh). Effects: none. Throws `ValidationError` for invalid arguments.
  * @template {(...args: any[]) => any} F
  * @param {F} fn
  * @param {{ ttlMs?: number, keyFn?: (...args: Parameters<F>) => unknown }} [options]
@@ -991,11 +1112,26 @@ export function memoAsync(fn, options = {}) {
   /** @type {Map<unknown, { promise: Promise<any>, expiresAt: number }>} */
   const cache = new Map();
 
+  function sweep() {
+    if (ttlMs === Infinity) return;
+    const now = Date.now();
+    for (const [key, entry] of cache) {
+      if (entry.expiresAt <= now) cache.delete(key);
+    }
+  }
+
   /** @this {unknown} */
   function memo(...args) {
-    const key = keyFn ? keyFn(...args) : defaultKey(args);
+    /** @type {unknown} */
+    let key;
+    try {
+      key = keyFn ? keyFn(...args) : defaultKey(args);
+    } catch (err) {
+      return Promise.reject(err);
+    }
     const hit = cache.get(key);
     if (hit && hit.expiresAt > Date.now()) return hit.promise;
+    sweep();
     /** @type {{ promise: Promise<any>, expiresAt: number }} */
     const entry = { promise: /** @type {any} */ (null), expiresAt: Infinity };
     entry.promise = start(() => fn.apply(this, args)).then(
